@@ -1,3 +1,4 @@
 version = 0
 
 [requires]
+  yjson = {git = "https://github.com/lIlIIlIll/yjson.git", commitId = "2a23f381ec1083929a68e4bd7546cce5c67b2fa1"}
