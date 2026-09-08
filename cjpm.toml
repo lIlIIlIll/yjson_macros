@@ -12,6 +12,3 @@ override-compile-option = ""
 link-option = ""
 package-configuration = {}
 
-[dependencies]
-# The standalone macro module consumes the matching yjson runtime module.
-yjson = { git = "https://github.com/lIlIIlIll/yjson.git" }
