@@ -1112,6 +1112,46 @@ private func appendFastFieldAssignment(
     appendLine(sb, level, "__seen_${field.name} = true")
 }
 
+private func directFastReadNeedsContext(fields: ArrayList<CodecField>): Bool {
+    for (field in fields) {
+        if (field.writeField &&
+            (directScalarFastRead(field, "__fastReader").isEmpty() ||
+                directFieldNeedsContext(field))) {
+            return true
+        }
+    }
+    false
+}
+
+private func appendDirectFastFieldAssignment(
+    sb: StringBuilder,
+    level: Int64,
+    field: CodecField,
+    label: String,
+    checkDuplicate: Bool,
+    fastReaderName: String
+): Unit {
+    let codec = fieldCodec(field)
+    let directRead = directScalarFastRead(field, fastReaderName)
+    let readValue = if (directRead.isEmpty()) {
+        "GeneratedSupportV1.readWithCached(${cachedFastFieldCodecName(field)}, ${codec}, reader)"
+    } else {
+        directRead
+    }
+    let assignValue = "__value_${field.name} = " +
+        (if (field.isOption || usesScalarScratch(field)) { readValue } else { "Some(${readValue})" })
+    if (checkDuplicate) {
+        appendLine(sb, level, "if (__seen_${field.name}) { context.pushField(${label}); try { throw JsonException(\"Duplicate JSON field\", code: \"duplicate_key\", path: context.currentPath()) } finally { context.popPath() } }")
+    }
+    if (directRead.isEmpty() || directFieldNeedsContext(field)) {
+        appendLine(sb, level, "context.pushField(${label})")
+        appendLine(sb, level, "try { ${assignValue} } finally { context.popPath() }")
+    } else {
+        appendLine(sb, level, assignValue)
+    }
+    appendLine(sb, level, "__seen_${field.name} = true")
+}
+
 // A default-constructed mutable class can be populated in place while the
 // fast reader walks its object fields.  This avoids one Option allocation per
 // non-scalar field and the final temporary-to-object copy, while retaining
@@ -1281,6 +1321,135 @@ private func appendFastCanonicalDecodedResult(
     }
 }
 
+private func appendDirectFastObjectRead(
+    sb: StringBuilder,
+    fields: ArrayList<CodecField>,
+    params: ArrayList<CodecConstructorParam>,
+    targetType: String,
+    fastLabels: ArrayList<(CodecField, String)>,
+    fastReaderName: String,
+    contextExpression: String
+): Unit {
+    let fastReadContext = directFastReadNeedsContext(fields)
+    if (fastReaderName == "__fastReader") {
+        appendLine(sb, 2, "let __fastReader = GeneratedSupportV1.readFastReader(reader)")
+    }
+    appendLine(sb, 2, "let context = ${contextExpression}")
+    if (fastReadContext) { appendLine(sb, 2, "context.enterValue()") }
+    appendLine(sb, 2, "try {")
+    for (field in fields) {
+        if (field.isOption) {
+            appendLine(sb, 3, "var __value_${field.name}: ${field.typeText} = None<${field.optionInner}>")
+        } else if (let Some(initializer) <- scalarScratchInitializer(field)) {
+            appendLine(sb, 3, "var __value_${field.name}: ${field.typeText} = ${initializer}")
+        } else {
+            appendLine(sb, 3, "var __value_${field.name}: Option<${field.typeText}> = None<${field.typeText}>")
+        }
+        appendLine(sb, 3, "var __seen_${field.name} = false")
+    }
+    appendLine(sb, 3, "reader.startRawObject()")
+    appendLine(sb, 3, "var __first = true")
+    var orderedFieldCount: Int64 = 0
+    var lastOrderedFieldName = ""
+    var hasPostConstructorField = false
+    for (field in fields) {
+        if (field.writeField) {
+            orderedFieldCount++
+            lastOrderedFieldName = field.name
+            if (field.mutable && constructorParamByName(params, field.name).isNone()) {
+                hasPostConstructorField = true
+            }
+        }
+    }
+    if (orderedFieldCount > 0) {
+        appendLine(sb, 3, "while (true) {")
+        var canonicalLabelIndex: Int64 = 0
+        for (field in fields) {
+            if (field.writeField) {
+                appendLine(sb, 4, "if (!reader.tryReadRawCompactNameTokenBytes(__first, __yJsonFastFieldNames[${canonicalLabelIndex}])) { break }")
+                appendDirectFastFieldAssignment(sb, 4, field, field.jsonNameExpr, false, fastReaderName)
+                appendLine(sb, 4, "__first = false")
+            }
+            canonicalLabelIndex += 1 + field.aliases.size
+        }
+        appendLine(sb, 4, "break")
+        appendLine(sb, 3, "}")
+        if (orderedFieldCount >= 3 && orderedFieldCount == fields.size && hasPostConstructorField) {
+            appendLine(sb, 3, "if (__seen_${lastOrderedFieldName} && !reader.hasRawObjectField(__first)) {")
+            appendLine(sb, 4, "reader.endRawObject()")
+            appendFastCanonicalDecodedResult(sb, 4, fields, params, targetType)
+            appendLine(sb, 3, "}")
+        }
+    }
+    appendLine(sb, 3, "while (reader.hasRawObjectField(__first)) {")
+    appendLine(sb, 4, "let __nameId = reader.readRawNameIdBytes(__first, __yJsonFastFieldNames)")
+    appendLine(sb, 4, "match (__nameId) {")
+    for (labelIndex in 0..fastLabels.size) {
+        let (field, label) = fastLabels[labelIndex]
+        appendLine(sb, 5, "case ${labelIndex} =>")
+        appendDirectFastFieldAssignment(sb, 6, field, label, true, fastReaderName)
+    }
+    appendLine(sb, 5, "case _ => reader.skipRawWithDepth(context.remainingDepth())")
+    appendLine(sb, 4, "}")
+    appendLine(sb, 4, "__first = false")
+    appendLine(sb, 3, "}")
+    appendLine(sb, 3, "reader.endRawObject()")
+    for (field in fields) {
+        if (fieldIsRequired(field, params)) {
+            appendLine(sb, 3, "if (!__seen_${field.name}) { throw JsonException(\"Missing required field: ${field.name}\", code: \"missing_field\", path: context.currentPath()) }")
+        }
+    }
+    if (!params.isEmpty()) {
+        let args = ArrayList<String>()
+        for (param in params) {
+            if (let Some(field) <- fieldByName(fields, param.name)) {
+                if (field.isOption) {
+                    args.add("__value_${field.name}")
+                } else if (usesScalarScratch(field)) {
+                    if (param.hasDefault) {
+                        args.add("if (__seen_${field.name}) { __value_${field.name} } else { ${param.defaultExpr} }")
+                    } else {
+                        args.add("__value_${field.name}")
+                    }
+                } else if (param.hasDefault) {
+                    args.add("if (__seen_${field.name}) { __value_${field.name}.getOrThrow() } else { ${param.defaultExpr} }")
+                } else {
+                    args.add("__value_${field.name}.getOrThrow()")
+                }
+            } else if (param.hasDefault) {
+                args.add(param.defaultExpr)
+            } else {
+                throw Exception("constructor parameter `${param.name}` has no JSON property")
+            }
+        }
+        appendLine(sb, 3, "let __result = ${targetType}(" + joinStrings(args, ", ") + ")")
+        for (field in fields) {
+            var covered = false
+            for (param in params) { if (param.name == field.name) { covered = true; break } }
+            if (!covered && field.mutable) {
+                if (field.isOption) { appendLine(sb, 3, "__result.${field.name} = __value_${field.name}") }
+                else if (usesScalarScratch(field)) { appendLine(sb, 3, "if (__seen_${field.name}) { __result.${field.name} = __value_${field.name} }") }
+                else { appendLine(sb, 3, "if (__seen_${field.name}) { __result.${field.name} = __value_${field.name}.getOrThrow() }") }
+            }
+        }
+        appendLine(sb, 3, "return __result")
+    } else {
+        appendLine(sb, 3, "let __result = ${targetType}()")
+        for (field in fields) {
+            if (!field.mutable) { throw Exception("immutable field `${field.name}` requires a constructor parameter") }
+            if (field.isOption) { appendLine(sb, 3, "__result.${field.name} = __value_${field.name}") }
+            else if (usesScalarScratch(field)) { appendLine(sb, 3, "if (__seen_${field.name}) { __result.${field.name} = __value_${field.name} }") }
+            else { appendLine(sb, 3, "if (__seen_${field.name}) { __result.${field.name} = __value_${field.name}.getOrThrow() }") }
+        }
+        appendLine(sb, 3, "return __result")
+    }
+    appendLine(sb, 2, if (fastReadContext) {
+        "} finally { context.leaveValue() }"
+    } else {
+        "} finally { let _ = context }"
+    })
+}
+
 private func renderCodec(decl: Decl, body: Body, isClass: Bool): Tokens {
     let name = decl.identifier.value
     let fields = collectFields(body)
@@ -1345,7 +1514,8 @@ private func renderCodec(decl: Decl, body: Body, isClass: Bool): Tokens {
             "GeneratedCursorWriteCodecV1<${targetType}>"
     }
     let codecInterfaces = "GeneratedObjectCodecV1<${targetType}> & " +
-        "GeneratedCodecV1<${targetType}> & GeneratedCursorReadCodecV1<${targetType}> & " +
+        "GeneratedCodecV1<${targetType}> & GeneratedDirectFastReadCodecV1<${targetType}> & " +
+        "GeneratedCursorReadCodecV1<${targetType}> & " +
         directInterface
     appendLine(sb, 0, "private class ${codecName}${genericText} <: ${codecInterfaces}${constraints} {")
     for (field in fields) {
@@ -1354,8 +1524,12 @@ private func renderCodec(decl: Decl, body: Body, isClass: Bool): Tokens {
             !directScalarFastRead(field, "reader").isEmpty()
         if (!fullyDirect) {
             appendLine(sb, 1, "private let ${cachedFieldCodecName(field)}: JsonCodec<${field.typeText}> = ${fieldCodecInitializer(field)}")
-            if (directScalarCursorFastRead(field).isEmpty()) {
+            let needsDirectFastCodec = directScalarFastRead(field, "__fastReader").isEmpty()
+            let needsCursorFastCodec = directScalarCursorFastRead(field).isEmpty()
+            if (needsDirectFastCodec || needsCursorFastCodec) {
                 appendLine(sb, 1, "private let ${cachedFastFieldCodecName(field)}: Option<GeneratedCodecV1<${field.typeText}>> = match (${cachedFieldCodecName(field)}) { case __fast: GeneratedCodecV1<${field.typeText}> => Some(__fast); case _ => None<GeneratedCodecV1<${field.typeText}>> }")
+            }
+            if (needsCursorFastCodec) {
                 appendLine(sb, 1, "private let ${cachedCursorFastFieldCodecName(field)}: Option<GeneratedCursorReadCodecV1<${field.typeText}>> = match (${cachedFieldCodecName(field)}) { case __fast: GeneratedCursorReadCodecV1<${field.typeText}> => Some(__fast); case _ => None<GeneratedCursorReadCodecV1<${field.typeText}>> }")
             }
             if (compactRawScalarFieldWrite(field, "__value", "__first").isEmpty() &&
@@ -1709,12 +1883,18 @@ private func renderCodec(decl: Decl, body: Body, isClass: Bool): Tokens {
     appendLine(sb, 2, "} finally { context.leaveValue() }")
     appendLine(sb, 1, "}")
 
-    // The fast reader is generated against the versioned v1 support protocol,
-    // never a concrete core reader class.
+    // The fast reader has both a versioned-reader compatibility entry point
+    // and a concrete-reader seam for recursive generated fast decoding.
     let fastReadContext = fastReadNeedsContext(fields)
     let mutableObjectFastRead = canUseMutableObjectFastRead(fields, params)
     appendLine(sb, 1, "public func readFast(reader: GeneratedSupportV1Reader): ${targetType} {")
     appendLine(sb, 2, "readFastWithCursor(reader, GeneratedSupportV1.readCursor(reader))")
+    appendLine(sb, 1, "}")
+    appendLine(sb, 1, "public func readFastDirect(reader: JsonFastReader): ${targetType} {")
+    appendDirectFastObjectRead(
+        sb, fields, params, targetType, fastLabels, "reader",
+        "reader.generatedReadStateV1()"
+    )
     appendLine(sb, 1, "}")
     appendLine(sb, 1, "public func readFastWithCursor(reader: GeneratedSupportV1Reader, __reader: GeneratedSupportV1ReadCursor): ${targetType} {")
     if (mutableObjectFastRead) {
