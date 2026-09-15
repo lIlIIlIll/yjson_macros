@@ -851,7 +851,7 @@ private func supportsStaticCompactRawWrite(fields: ArrayList<CodecField>): Bool 
 }
 
 private func compactRawFieldNeedsContext(field: CodecField): Bool {
-    !field.codecExpr.isEmpty() || field.isOption
+    !field.codecExpr.isEmpty() || field.isOption || !simpleGeneratedTypeName(field).isEmpty()
 }
 
 private func compactRawNeedsContext(fields: ArrayList<CodecField>): Bool {
