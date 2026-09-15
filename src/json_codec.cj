@@ -863,10 +863,9 @@ private func compactRawNeedsContext(fields: ArrayList<CodecField>): Bool {
     false
 }
 
-// Direct buffer field methods can omit their repeated capacity check when the
-// generated object reserves a conservative bound once up front.  Keep this
-// list limited to value shapes whose bound is local and deterministic; maps,
-// nested objects, and string arrays retain their checked writer paths.
+// Compile-time reserve terms cover value shapes with local deterministic
+// bounds. Runtime-sized values remain as a short dynamic term list, while
+// non-literal names use the general exact-expression fallback.
 private func generatedBufferReserveTerm(field: CodecField, value: String): String {
     if (!field.writeField || !field.codecExpr.isEmpty() || field.isOption) { return "" }
     let name = "(${field.jsonNameExpr}).size"
@@ -875,15 +874,45 @@ private func generatedBufferReserveTerm(field: CodecField, value: String): Strin
         case "Int8" | "Int16" | "Int32" | "Int64" |
              "UInt8" | "UInt16" | "UInt32" | "UInt64" => "${name} + 24"
         case "Float16" | "Float32" | "Float64" => "${name} + 44"
-        // The fast method scans each string first.  Unescaped values need only
-        // their exact byte length here; escaped values take the checked fused
-        // writer, which reserves its six-byte escape bound locally.
+        // General fallback retains the runtime value-length term when a
+        // field name cannot be folded above.
         case "String" => "${name} + ${value}.size + 8"
         case _ => ""
     }
 }
 
+// Fold static field names and fixed-width bounds at macro expansion time.
+// String values remain the only runtime terms for the common literal-name
+// shape; non-literal names retain the general exact expression below.
 private func generatedBufferReserveHint(fields: ArrayList<CodecField>, valuePrefix: String): String {
+    var fixedReserve: Int64 = 2
+    let dynamicTerms = ArrayList<String>()
+    var canFold = true
+    for (field in fields) {
+        if (!field.writeField) { continue }
+        if (!field.codecExpr.isEmpty() || field.isOption ||
+            field.jsonNameExpr != "\"${field.name}\"") {
+            canFold = false
+            continue
+        }
+        let nameSize = field.name.size
+        match (field.typeText.replace(" ", "")) {
+            case "Bool" => fixedReserve += nameSize + 8
+            case "Int8" | "Int16" | "Int32" | "Int64" |
+                 "UInt8" | "UInt16" | "UInt32" | "UInt64" =>
+                fixedReserve += nameSize + 24
+            case "Float16" | "Float32" | "Float64" =>
+                fixedReserve += nameSize + 44
+            case "String" =>
+                fixedReserve += nameSize + 8
+                dynamicTerms.add("${valuePrefix}.${field.name}.size")
+            case _ => canFold = false
+        }
+    }
+    if (canFold) {
+        if (dynamicTerms.isEmpty()) { return "${fixedReserve}" }
+        return "${fixedReserve} + " + joinStrings(dynamicTerms, " + ")
+    }
     let terms = ArrayList<String>()
     for (field in fields) {
         let term = generatedBufferReserveTerm(field, "${valuePrefix}.${field.name}")
@@ -1222,8 +1251,12 @@ private func appendMutableObjectFastRead(
     appendLine(sb, 3, "__reader.startRawObject()")
     appendLine(sb, 3, "var __first = true")
     var orderedFieldCount: Int64 = 0
+    var lastOrderedFieldName = ""
     for (field in fields) {
-        if (field.writeField) { orderedFieldCount++ }
+        if (field.writeField) {
+            orderedFieldCount++
+            lastOrderedFieldName = field.name
+        }
     }
     if (orderedFieldCount > 0) {
         appendLine(sb, 3, "while (true) {")
@@ -1238,7 +1271,16 @@ private func appendMutableObjectFastRead(
         }
         appendLine(sb, 4, "break")
         appendLine(sb, 3, "}")
+        // A complete declaration-order prefix can return without entering the
+        // policy-aware dispatcher; any trailing token still takes the fallback.
+        if (orderedFieldCount == fields.size) {
+            appendLine(sb, 3, "if (__seen_${lastOrderedFieldName} && !__reader.hasRawObjectField(__first)) {")
+            appendLine(sb, 4, "__reader.endRawObject()")
+            appendLine(sb, 4, "return __result")
+            appendLine(sb, 3, "}")
+        }
     }
+
     appendLine(sb, 3, "while (__reader.hasRawObjectField(__first)) {")
     appendLine(sb, 4, "let __nameId = __reader.readRawNameIdBytes(__first, __yJsonFastFieldNames)")
     appendLine(sb, 4, "match (__nameId) {")
@@ -1671,16 +1713,18 @@ private func renderCodec(decl: Decl, body: Body, isClass: Bool): Tokens {
             }
         }
         appendLine(sb, 1, "public func writeCompactRawWithWriter(value: ${targetType}, writer: JsonDirectWriter): Unit {")
-        appendLine(sb, 2, "let context = GeneratedSupportV1.writeState(writer)")
-        appendLine(sb, 2, "context.enterValue()")
-        appendLine(sb, 2, "try {")
+        if (compactNeedsContext) {
+            appendLine(sb, 2, "let context = GeneratedSupportV1.writeState(writer)")
+            appendLine(sb, 2, "context.enterValue()")
+            appendLine(sb, 2, "try {")
+        }
         if (compactHasDirectField) {
             appendLine(sb, 2, "let __buffer = writer.generatedBufferV1()")
             let reserveHint = generatedBufferReserveHint(fields, "value")
             if (!reserveHint.isEmpty()) {
                 appendLine(sb, 2, "__buffer.reserveCapacity(${reserveHint})")
             } else if (fields.size >= 8) {
-                // Wide generated objects otherwise grow the direct buffer in
+                // Large generated objects otherwise grow the direct buffer in
                 // the middle of the field loop.  A bounded per-field hint
                 // avoids those reallocations without over-reserving small
                 // records or value-heavy arrays/maps.
@@ -1766,7 +1810,9 @@ private func renderCodec(decl: Decl, body: Body, isClass: Bool): Tokens {
             }
         }
         appendLine(sb, 3, "writer.writeRawEndObject()")
-        appendLine(sb, 2, "} finally { context.leaveValue() }")
+        if (compactNeedsContext) {
+            appendLine(sb, 2, "} finally { context.leaveValue() }")
+        }
         appendLine(sb, 1, "}")
         appendLine(sb, 1, "public func writeCompactRawArrayList(value: YJsonArrayList<${targetType}>, writer: GeneratedSupportV1Writer): Unit {")
         appendLine(sb, 2, "let context = GeneratedSupportV1.writeState(writer)")
