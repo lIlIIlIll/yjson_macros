@@ -854,14 +854,6 @@ private func compactRawFieldNeedsContext(field: CodecField): Bool {
     !field.codecExpr.isEmpty() || field.isOption || !simpleGeneratedTypeName(field).isEmpty()
 }
 
-private func compactRawNeedsContext(fields: ArrayList<CodecField>): Bool {
-    for (field in fields) {
-        if (field.writeField && compactRawFieldNeedsContext(field)) {
-            return true
-        }
-    }
-    false
-}
 
 // Compile-time reserve terms cover value shapes with local deterministic
 // bounds. Runtime-sized values remain as a short dynamic term list, while
@@ -1540,7 +1532,8 @@ private func renderCodec(decl: Decl, body: Body, isClass: Bool): Tokens {
         }
     }
     let staticCompact = supportsStaticCompactRawWrite(fields)
-    let compactNeedsContext = compactRawNeedsContext(fields)
+    // Every generated object must account for its own write depth. Field-level
+    // context checks only decide path tracking around nested field writes.
     var compactHasDirectField = false
     for (field in fields) {
         if (field.writeField && !compactRawScalarFieldWrite(field, "__value", "__first").isEmpty()) {
@@ -1713,11 +1706,9 @@ private func renderCodec(decl: Decl, body: Body, isClass: Bool): Tokens {
             }
         }
         appendLine(sb, 1, "public func writeCompactRawWithWriter(value: ${targetType}, writer: JsonDirectWriter): Unit {")
-        if (compactNeedsContext) {
-            appendLine(sb, 2, "let context = GeneratedSupportV1.writeState(writer)")
-            appendLine(sb, 2, "context.enterValue()")
-            appendLine(sb, 2, "try {")
-        }
+        appendLine(sb, 2, "let context = GeneratedSupportV1.writeState(writer)")
+        appendLine(sb, 2, "context.enterValue()")
+        appendLine(sb, 2, "try {")
         if (compactHasDirectField) {
             appendLine(sb, 2, "let __buffer = writer.generatedBufferV1()")
             let reserveHint = generatedBufferReserveHint(fields, "value")
@@ -1802,7 +1793,7 @@ private func renderCodec(decl: Decl, body: Body, isClass: Bool): Tokens {
                 }
             }
             concreteRawWrite = compactRawDirectWriterRewrite(concreteRawWrite)
-            if (compactNeedsContext && compactRawFieldNeedsContext(field)) {
+            if (compactRawFieldNeedsContext(field)) {
                 appendLine(sb, 2, "context.pushField(${field.jsonNameExpr})")
                 appendLine(sb, 2, "try { ${concreteRawWrite} } finally { context.popPath() }")
             } else {
@@ -1810,9 +1801,7 @@ private func renderCodec(decl: Decl, body: Body, isClass: Bool): Tokens {
             }
         }
         appendLine(sb, 3, "writer.writeRawEndObject()")
-        if (compactNeedsContext) {
-            appendLine(sb, 2, "} finally { context.leaveValue() }")
-        }
+        appendLine(sb, 2, "} finally { context.leaveValue() }")
         appendLine(sb, 1, "}")
         appendLine(sb, 1, "public func writeCompactRawArrayList(value: YJsonArrayList<${targetType}>, writer: GeneratedSupportV1Writer): Unit {")
         appendLine(sb, 2, "let context = GeneratedSupportV1.writeState(writer)")
