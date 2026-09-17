@@ -874,7 +874,7 @@ private func appendObjectFieldWrite(
     }
 }
 
-private func renderCodec(decl: Decl, body: Body, isClass: Bool): Tokens {
+private func analyzeObjectCodec(decl: Decl, body: Body, isClass: Bool): ObjectCodecModel {
     let name = decl.identifier.value
     let fields = collectFields(body)
     let params = constructorParams(body)
@@ -914,27 +914,18 @@ private func renderCodec(decl: Decl, body: Body, isClass: Bool): Tokens {
     let targetType = name + genericText
     let constraints = renderedConstraints(decl, fields, generics)
     let codecName = "__YJsonCodec_${name}"
-    let sb = StringBuilder()
-    let fastLabels = ArrayList<(CodecField, String)>()
-    let fastLabelBytes = ArrayList<String>()
-    for (field in fields) {
-        fastLabels.add((field, field.jsonNameExpr))
-        fastLabelBytes.add("(${field.jsonNameExpr}).rawData()")
-        for (alias in field.aliases) {
-            fastLabels.add((field, alias))
-            fastLabelBytes.add("(${alias}).rawData()")
-        }
-    }
-    let staticCompact = supportsStaticCompactRawWrite(fields)
-    // Every generated object must account for its own write depth. Field-level
-    // context checks only decide path tracking around nested field writes.
-    var compactHasDirectField = false
-    for (field in fields) {
-        if (field.writeField && !compactRawSpecializedFieldWrite(field, "__value", "__first").isEmpty()) {
-            compactHasDirectField = true
-            break
-        }
-    }
+    ObjectCodecModel(decl, name, fields, params, generics, genericText, targetType,
+        constraints, codecName, inheritedObjectType, isClass, supportsStaticCompactRawWrite(fields))
+}
+
+private func appendObjectCodecPrelude(sb: StringBuilder, model: ObjectCodecModel): Unit {
+    let fields = model.fields
+    let targetType = model.targetType
+    let codecName = model.codecName
+    let genericText = model.genericText
+    let constraints = model.constraints
+    let staticCompact = model.staticCompact
+    let fastLabelBytes = model.fastLabelBytes
     let directInterface = if (staticCompact) {
         "GeneratedCompactCursorWriteCodecV1<${targetType}> & " +
             "GeneratedCompactArrayListElementCodecV1<${targetType}>"
@@ -970,6 +961,12 @@ private func renderCodec(decl: Decl, body: Body, isClass: Bool): Tokens {
     }
     appendLine(sb, 1, "private let __yJsonFastFieldNames: Array<Array<Byte>> = unsafe { [" +
         joinStrings(fastLabelBytes, ", ") + "] }")
+}
+
+private func appendObjectSemanticWriteMethods(sb: StringBuilder, model: ObjectCodecModel): Unit {
+    let fields = model.fields
+    let targetType = model.targetType
+    let isClass = model.isClass
     appendLine(sb, 1, "public func write(value: ${targetType}, writer: JsonWriter): Unit {")
     appendLine(sb, 2, "match (writer) { case __direct: GeneratedSupportV1Writer => writeDirect(value, __direct); return; case _ => () }")
     appendLine(sb, 2, "let context = GeneratedSupportV1.writeState(writer)")
@@ -997,6 +994,13 @@ private func renderCodec(decl: Decl, body: Body, isClass: Bool): Tokens {
         appendObjectFieldWrite(sb, field, directWrite, writeValue)
     }
     appendLine(sb, 1, "}")
+}
+
+private func appendObjectDirectWriteMethods(sb: StringBuilder, model: ObjectCodecModel): Unit {
+    let fields = model.fields
+    let targetType = model.targetType
+    let isClass = model.isClass
+    let staticCompact = model.staticCompact
     appendLine(sb, 1, "public func writeDirect(value: ${targetType}, writer: GeneratedSupportV1Writer): Unit {")
     appendLine(sb, 2, (if (staticCompact) {
         "if (writer.tryBeginGeneratedCompactRawValue()) { writeCompactRaw(value, writer); return }"
@@ -1024,134 +1028,157 @@ private func renderCodec(decl: Decl, body: Body, isClass: Bool): Tokens {
         appendObjectFieldWrite(sb, field, directWrite, writeValue)
     }
     appendLine(sb, 1, "}")
+}
+
+private func appendObjectCompactCursorWriteMethods(sb: StringBuilder, model: ObjectCodecModel): Unit {
+    let fields = model.fields
+    let targetType = model.targetType
+    let generics = model.genericNames
     let rawChecks = ArrayList<String>()
-        for (field in fields) {
-            if (!field.writeField) { continue }
-            if (compactRawSpecializedFieldWrite(field, "__value", "__first").isEmpty() &&
-                directScalarWrite(field, "__value").isEmpty()) {
-                rawChecks.add("match (${compactRawCursorCodecName(field)}) { " +
-                    "case Some(__rawCursor) => __rawCursor.supportsCompactCursorWrite(); " +
-                    "case None => match (${compactRawCodecName(field)}) { " +
-                    "case Some(__raw) => __raw.supportsCompactRaw(); case None => false } }")
-            }
+    for (field in fields) {
+        if (!field.writeField) { continue }
+        if (compactRawSpecializedFieldWrite(field, "__value", "__first").isEmpty() &&
+            directScalarWrite(field, "__value").isEmpty()) {
+            rawChecks.add("match (${compactRawCursorCodecName(field)}) { " +
+                "case Some(__rawCursor) => __rawCursor.supportsCompactCursorWrite(); " +
+                "case None => match (${compactRawCodecName(field)}) { " +
+                "case Some(__raw) => __raw.supportsCompactRaw(); case None => false } }")
         }
+    }
     appendLine(sb, 1, "public func supportsCompactRaw(): Bool { " +
-            (if (rawChecks.isEmpty()) { "true" } else { joinStrings(rawChecks, " && ") }) + " }")
+        (if (rawChecks.isEmpty()) { "true" } else { joinStrings(rawChecks, " && ") }) + " }")
     appendLine(sb, 1, "public func writeCompactRaw(value: ${targetType}, writer: GeneratedSupportV1Writer): Unit {")
-        appendLine(sb, 2, "writeCompactRawWithCursor(value, writer, GeneratedSupportV1.writeCursor(writer))")
+    appendLine(sb, 2, "writeCompactRawWithCursor(value, writer, GeneratedSupportV1.writeCursor(writer))")
     appendLine(sb, 1, "}")
-        appendLine(sb, 1, "public func writeCompactRawWithCursor(value: ${targetType}, writer: GeneratedSupportV1Writer, __writer: GeneratedSupportV1WriteCursor): Unit {")
-        appendLine(sb, 2, "let context = GeneratedSupportV1.writeState(writer)")
-        appendLine(sb, 2, "context.enterValue()")
-        appendLine(sb, 2, "try {")
-        appendLine(sb, 3, "__writer.writeRawBeginObject()")
-        appendLine(sb, 3, "var __first = true")
-        for (field in fields) {
-            if (!field.writeField) { continue }
-            let rawWrite = compactRawFieldWrite(field, "value.${field.name}", "__first")
-            if (compactRawFieldNeedsContext(field, generics)) {
-                appendLine(sb, 3, "context.pushField(${field.jsonNameExpr})")
-                appendLine(sb, 3, "try { ${rawWrite} } finally { context.popPath() }")
-            } else {
-                appendLine(sb, 3, rawWrite)
-            }
+    appendLine(sb, 1, "public func writeCompactRawWithCursor(value: ${targetType}, writer: GeneratedSupportV1Writer, __writer: GeneratedSupportV1WriteCursor): Unit {")
+    appendLine(sb, 2, "let context = GeneratedSupportV1.writeState(writer)")
+    appendLine(sb, 2, "context.enterValue()")
+    appendLine(sb, 2, "try {")
+    appendLine(sb, 3, "__writer.writeRawBeginObject()")
+    appendLine(sb, 3, "var __first = true")
+    for (field in fields) {
+        if (!field.writeField) { continue }
+        let rawWrite = compactRawFieldWrite(field, "value.${field.name}", "__first")
+        if (compactRawFieldNeedsContext(field, generics)) {
+            appendLine(sb, 3, "context.pushField(${field.jsonNameExpr})")
+            appendLine(sb, 3, "try { ${rawWrite} } finally { context.popPath() }")
+        } else {
+            appendLine(sb, 3, rawWrite)
         }
-        appendLine(sb, 3, "__writer.writeRawEndObject()")
-        appendLine(sb, 2, "} finally { context.leaveValue() }")
-        appendLine(sb, 1, "}")
+    }
+    appendLine(sb, 3, "__writer.writeRawEndObject()")
+    appendLine(sb, 2, "} finally { context.leaveValue() }")
+    appendLine(sb, 1, "}")
     appendLine(sb, 1, "public func supportsCompactCursorWrite(): Bool { supportsCompactRaw() }")
     appendLine(sb, 1, "public func writeCompactWithCursor(value: ${targetType}, writer: GeneratedSupportV1Writer, __writer: GeneratedSupportV1WriteCursor): Unit { writeCompactRawWithCursor(value, writer, __writer) }")
-    if (staticCompact) {
-        var compactNeedsWriterCursor = false
-        for (field in fields) {
-            if (!field.writeField) { continue }
-            if (FieldWritePlan(field).needsCachedDirectCursor()) {
-                compactNeedsWriterCursor = true
-                break
-            }
-        }
-        appendLine(sb, 1, "public func writeCompactRawWithWriter(value: ${targetType}, writer: JsonDirectWriter): Unit {")
-        appendLine(sb, 2, "let context = GeneratedSupportV1.writeState(writer)")
-        appendLine(sb, 2, "context.enterValue()")
-        appendLine(sb, 2, "try {")
-        if (compactHasDirectField) {
-            appendLine(sb, 2, "let __buffer = writer.generatedBufferV1()")
-            let reserveHint = generatedBufferReserveHint(fields, "value")
-            if (!reserveHint.isEmpty()) {
-                appendLine(sb, 2, "__buffer.reserveCapacity(${reserveHint})")
-            } else if (fields.size >= 8) {
-                // Large generated objects otherwise grow the direct buffer in
-                // the middle of the field loop.  A bounded per-field hint
-                // avoids those reallocations without over-reserving small
-                // records or value-heavy arrays/maps.
-                appendLine(sb, 2, "__buffer.reserveCapacity(${fields.size * 32 + 2})")
-            }
-        }
-        if (compactNeedsWriterCursor) {
-            appendLine(sb, 2, "let __writer = writer.generatedCursorV1()")
-        }
-        let scalarBufferBatch = generatedBufferAllScalar(fields)
-        appendLine(sb, 2, "writer.writeRawBeginObject()")
-        appendLine(sb, 2, "var __first = true")
-        for (field in fields) {
-            if (!field.writeField) {
-                continue
-            }
-            let scalarRawWrite = renderCompactDirectScalarField(
-                FieldWritePlan(field), "value.${field.name}", "__first", scalarBufferBatch)
-            let rawWrite = if (scalarRawWrite.isEmpty()) {
-                compactRawConcreteFieldWrite(
-                    field, "value.${field.name}", "__first", generics)
-            } else {
-                scalarRawWrite
-            }
-            if (compactRawFieldNeedsContext(field, generics)) {
-                appendLine(sb, 2, "context.pushField(${field.jsonNameExpr})")
-                appendLine(sb, 2, "try { ${rawWrite} } finally { context.popPath() }")
-            } else {
-                appendLine(sb, 2, rawWrite)
-            }
-        }
-        appendLine(sb, 3, "writer.writeRawEndObject()")
-        appendLine(sb, 2, "} finally { context.leaveValue() }")
-        appendLine(sb, 1, "}")
-        appendLine(sb, 1, "public func writeCompactRawArrayList(value: YJsonArrayList<${targetType}>, writer: GeneratedSupportV1Writer): Unit {")
-        appendLine(sb, 2, "let context = GeneratedSupportV1.writeState(writer)")
-        appendLine(sb, 2, "context.enterValue()")
-        appendLine(sb, 2, "try {")
-        appendLine(sb, 3, "let __writer = GeneratedSupportV1.writeCursor(writer)")
-        appendLine(sb, 3, "__writer.reserveRawCollectionCapacity(value.size)")
-        appendLine(sb, 3, "__writer.writeRawBeginArray()")
-        appendLine(sb, 3, "if (!value.isEmpty()) {")
-        appendLine(sb, 4, "context.pushIndex(0)")
-        appendLine(sb, 4, "try {")
-        appendLine(sb, 5, "for (__index in 0..value.size) {")
-        appendLine(sb, 6, "if (__index > 0) { __writer.writeRawByte(b','); context.updateLastIndex(__index) }")
-        appendLine(sb, 6, "writeCompactRawWithCursor(value[__index], writer, __writer)")
-        appendLine(sb, 5, "}")
-        appendLine(sb, 4, "} finally { context.popPath() }")
-        appendLine(sb, 3, "}")
-        appendLine(sb, 3, "__writer.writeRawEndArray()")
-        appendLine(sb, 2, "} finally { context.leaveValue() }")
-    appendLine(sb, 1, "}")
-    }
-    appendObjectReadMethods(sb, fields, params, targetType, fastLabels, generics)
-    appendLine(sb, 0, "}")
+}
 
-    appendObjectProviders(sb, ObjectCodecModel(
-        decl,
-        name,
-        fields,
-        params,
-        generics,
-        genericText,
-        targetType,
-        constraints,
-        codecName,
-        inheritedObjectType,
-        isClass,
-        staticCompact
-    ))
+private func appendObjectCompactWriterMethod(sb: StringBuilder, model: ObjectCodecModel): Unit {
+    let fields = model.fields
+    let targetType = model.targetType
+    let generics = model.genericNames
+    // Every generated object must account for its own write depth. Field-level
+    // context checks only decide path tracking around nested field writes.
+    var compactHasDirectField = false
+    for (field in fields) {
+        if (field.writeField && !compactRawSpecializedFieldWrite(field, "__value", "__first").isEmpty()) {
+            compactHasDirectField = true
+            break
+        }
+    }
+    var compactNeedsWriterCursor = false
+    for (field in fields) {
+        if (!field.writeField) { continue }
+        if (FieldWritePlan(field).needsCachedDirectCursor()) {
+            compactNeedsWriterCursor = true
+            break
+        }
+    }
+    appendLine(sb, 1, "public func writeCompactRawWithWriter(value: ${targetType}, writer: JsonDirectWriter): Unit {")
+    appendLine(sb, 2, "let context = GeneratedSupportV1.writeState(writer)")
+    appendLine(sb, 2, "context.enterValue()")
+    appendLine(sb, 2, "try {")
+    if (compactHasDirectField) {
+        appendLine(sb, 2, "let __buffer = writer.generatedBufferV1()")
+        let reserveHint = generatedBufferReserveHint(fields, "value")
+        if (!reserveHint.isEmpty()) {
+            appendLine(sb, 2, "__buffer.reserveCapacity(${reserveHint})")
+        } else if (fields.size >= 8) {
+            // Large generated objects otherwise grow the direct buffer in
+            // the middle of the field loop.  A bounded per-field hint
+            // avoids those reallocations without over-reserving small
+            // records or value-heavy arrays/maps.
+            appendLine(sb, 2, "__buffer.reserveCapacity(${fields.size * 32 + 2})")
+        }
+    }
+    if (compactNeedsWriterCursor) {
+        appendLine(sb, 2, "let __writer = writer.generatedCursorV1()")
+    }
+    let scalarBufferBatch = generatedBufferAllScalar(fields)
+    appendLine(sb, 2, "writer.writeRawBeginObject()")
+    appendLine(sb, 2, "var __first = true")
+    for (field in fields) {
+        if (!field.writeField) {
+            continue
+        }
+        let scalarRawWrite = renderCompactDirectScalarField(
+            FieldWritePlan(field), "value.${field.name}", "__first", scalarBufferBatch)
+        let rawWrite = if (scalarRawWrite.isEmpty()) {
+            compactRawConcreteFieldWrite(
+                field, "value.${field.name}", "__first", generics)
+        } else {
+            scalarRawWrite
+        }
+        if (compactRawFieldNeedsContext(field, generics)) {
+            appendLine(sb, 2, "context.pushField(${field.jsonNameExpr})")
+            appendLine(sb, 2, "try { ${rawWrite} } finally { context.popPath() }")
+        } else {
+            appendLine(sb, 2, rawWrite)
+        }
+    }
+    appendLine(sb, 3, "writer.writeRawEndObject()")
+    appendLine(sb, 2, "} finally { context.leaveValue() }")
+    appendLine(sb, 1, "}")
+}
+
+private func appendObjectCompactArrayListWriteMethod(sb: StringBuilder, model: ObjectCodecModel): Unit {
+    let targetType = model.targetType
+    appendLine(sb, 1, "public func writeCompactRawArrayList(value: YJsonArrayList<${targetType}>, writer: GeneratedSupportV1Writer): Unit {")
+    appendLine(sb, 2, "let context = GeneratedSupportV1.writeState(writer)")
+    appendLine(sb, 2, "context.enterValue()")
+    appendLine(sb, 2, "try {")
+    appendLine(sb, 3, "let __writer = GeneratedSupportV1.writeCursor(writer)")
+    appendLine(sb, 3, "__writer.reserveRawCollectionCapacity(value.size)")
+    appendLine(sb, 3, "__writer.writeRawBeginArray()")
+    appendLine(sb, 3, "if (!value.isEmpty()) {")
+    appendLine(sb, 4, "context.pushIndex(0)")
+    appendLine(sb, 4, "try {")
+    appendLine(sb, 5, "for (__index in 0..value.size) {")
+    appendLine(sb, 6, "if (__index > 0) { __writer.writeRawByte(b','); context.updateLastIndex(__index) }")
+    appendLine(sb, 6, "writeCompactRawWithCursor(value[__index], writer, __writer)")
+    appendLine(sb, 5, "}")
+    appendLine(sb, 4, "} finally { context.popPath() }")
+    appendLine(sb, 3, "}")
+    appendLine(sb, 3, "__writer.writeRawEndArray()")
+    appendLine(sb, 2, "} finally { context.leaveValue() }")
+    appendLine(sb, 1, "}")
+}
+
+private func renderCodec(decl: Decl, body: Body, isClass: Bool): Tokens {
+    let model = analyzeObjectCodec(decl, body, isClass)
+    let sb = StringBuilder()
+    appendObjectCodecPrelude(sb, model)
+    appendObjectSemanticWriteMethods(sb, model)
+    appendObjectDirectWriteMethods(sb, model)
+    appendObjectCompactCursorWriteMethods(sb, model)
+    if (model.staticCompact) {
+        appendObjectCompactWriterMethod(sb, model)
+        appendObjectCompactArrayListWriteMethod(sb, model)
+    }
+    appendObjectReadMethods(sb, model.fields, model.constructorParams, model.targetType,
+        model.fastLabels, model.genericNames)
+    appendLine(sb, 0, "}")
+    appendObjectProviders(sb, model)
     cangjieLex(sb.toString())
 }
 

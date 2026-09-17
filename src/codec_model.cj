@@ -116,6 +116,8 @@ internal class ObjectCodecModel {
     let inheritedObjectType: String
     let isClass: Bool
     let staticCompact: Bool
+    let fastLabels = ArrayList<(CodecField, String)>()
+    let fastLabelBytes = ArrayList<String>()
 
     init(
         declaration: Decl,
@@ -143,5 +145,13 @@ internal class ObjectCodecModel {
         this.inheritedObjectType = inheritedObjectType
         this.isClass = isClass
         this.staticCompact = staticCompact
+        for (field in fields) {
+            fastLabels.add((field, field.jsonNameExpr))
+            fastLabelBytes.add("(${field.jsonNameExpr}).rawData()")
+            for (alias in field.aliases) {
+                fastLabels.add((field, alias))
+                fastLabelBytes.add("(${alias}).rawData()")
+            }
+        }
     }
 }
