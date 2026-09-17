@@ -22,11 +22,11 @@ does not mark a roadmap item complete when only its first safe slice has landed.
 | --- | --- | --- |
 | R01 | Core complete | Added a pinned-runtime consumer harness covering object, struct, generic, custom-codec, enum, polymorphic, inherited-field, alias/default/error, byte-input, and literal behavior. The runtime revision is recorded in the runner. Performance baselines and negative compile fixtures remain completion-gate work. |
 | R02 | Complete | Moved field/constructor/subtype/object models and AST analysis into `codec_model.cj` and `codec_analysis.cj`. Emission still consumes original type spelling. |
-| R03 | In progress | Added `FieldTypeShape` and `FieldCapabilities`; primitive classification, scalar scratch selection, and generated-concrete selection use them. Container capabilities, reserve hints, and all compact-write decisions still use the existing tables. |
+| R03 | In progress | Added `FieldTypeShape` and `FieldCapabilities`; primitive classification, scalar scratch selection, generated-concrete selection, and scalar/fixed-container compact-write planning use them. Generic container capabilities and reserve hints still use the existing tables. |
 | R04 | Not started | Expansion diagnostics and emitted runtime errors remain in their current emitters. |
 | R05 | Complete | Centralized scratch declarations, canonical-field planning, required-field checks, constructor argument/default selection, and post-constructor assignment in `codec_decode_plan.cj`; semantic, direct-fast, and cursor-fast readers share them. |
 | R06 | In progress | Object read-method generation now has a dedicated emitter function and the fast backends share assignment emission. Backend dispatch loops remain separate and intentionally retain their reader- and policy-specific operations. |
-| R07 | Not started | Compact-write string rewriting is unchanged. |
+| R07 | Core complete | Added `FieldWritePlan` and closed scalar/container operations. Cursor and direct-writer scalar operations, including widening and option null/omission policy, specialized containers, generic primitive sequence/map containers, nested/custom codecs, and concrete generated codecs now render independently. Receiver and method-name rewrite chains are removed; focused performance comparison remains completion-gate work. |
 | R08 | Not started | Generated-support v1 vocabulary remains distributed. |
 | R09 | In progress | Object provider and public-overload generation moved to `codec_provider_emitter.cj`; integration with a future runtime-protocol emitter remains pending on R08. |
 | R10-R14 | Not started | These stay behind their declared dependencies; no mechanical file split was used to claim progress. |
@@ -40,10 +40,10 @@ that optimization, and the regression is covered by the consumer harness.
 
 | Check | Audit baseline | Current result |
 | --- | ---: | ---: |
-| `src/json_codec.cj` physical lines | 2,535 | 1,871 |
-| `renderCodec` span | about 692 lines | 337 lines |
-| Production source physical lines | 2,998 | 3,202 |
-| Duplicated effective lines (10-line windows) | 296 / 2,801 | 0 / 2,989 |
+| `src/json_codec.cj` physical lines | 2,535 | 1,513 |
+| `renderCodec` span | about 692 lines | 281 lines |
+| Production source physical lines | 2,998 | 3,338 |
+| Duplicated effective lines (10-line windows) | 296 / 2,801 | 0 / 3,107 |
 | Duplicate rate | 10.57% | 0.00% |
 
 The total production-source size increased because the refactor introduced
