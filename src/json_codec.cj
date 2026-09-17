@@ -131,16 +131,6 @@ private func cachedCursorFastFieldCodecName(field: CodecField): String {
 }
 
 
-// Canonical generated field names are immutable literals. Keep one byte view
-// per field so direct compact writers do not call String.rawData() on every
-// encoded object. Custom names remain on the String overloads because their
-// expression may be computed or otherwise carry user-defined semantics.
-private func generatedKnownNameBytesName(field: CodecField): String {
-    // Delimit the generated identifier so a field such as `f1` cannot match
-    // the prefix of another field such as `f10` during source-level rewrites.
-    "__yJsonKnownNameBytes_${field.name}__"
-}
-
 // A non-generic user model emitted by @JsonCodec owns a private concrete
 // codec global with the same source-level name.  Keep this deliberately
 // narrow: container/builtin/custom-codec fields must continue through their
@@ -199,279 +189,23 @@ private func directScalarWrite(field: CodecField, value: String): String {
     }
 }
 
-private func compactRawScalarFieldWrite(field: CodecField, value: String, first: String): String {
-    if (!field.codecExpr.isEmpty()) { return "" }
-    let nameKind = if (field.jsonNameExpr == "\"${field.name}\"") { "KnownName" } else { "Name" }
-    if (field.typeText.replace(" ", "") == "Option<Int64>") {
-        let someWrite = "${first} = __writer.writeRawObjectEntry${nameKind}Int64(${first}, " +
-            "${field.jsonNameExpr}, __rawItem)"
-        if (!field.includeNull) {
-            return "if (let Some(__rawItem) <- ${value}) { ${someWrite} }"
-        }
-        return "match (${value}) { case Some(__rawItem) => ${someWrite}; " +
-            "case None => ${first} = __writer.writeRawObjectEntry${nameKind}(${first}, ${field.jsonNameExpr}); " +
-            "writer.writeRawNull() }"
-    }
-    if (field.typeText.replace(" ", "") == "Option<String>") {
-        let someWrite = "${first} = __writer.writeRawObjectEntry${nameKind}String(${first}, " +
-            "${field.jsonNameExpr}, __rawItem)"
-        if (!field.includeNull) {
-            return "if (let Some(__rawItem) <- ${value}) { ${someWrite} }"
-        }
-        return "match (${value}) { case Some(__rawItem) => ${someWrite}; " +
-            "case None => ${first} = __writer.writeRawObjectEntry${nameKind}(${first}, ${field.jsonNameExpr}); " +
-            "writer.writeRawNull() }"
-    }
-    if (field.isOption) { return "" }
-    match (field.typeText.replace(" ", "")) {
-        case "String" =>
-            "${first} = __writer.writeRawObjectEntry${nameKind}String(${first}, ${field.jsonNameExpr}, ${value})"
-        case "Bool" =>
-            "${first} = __writer.writeRawObjectEntry${nameKind}Bool(${first}, ${field.jsonNameExpr}, ${value})"
-        case "Int64" =>
-            "${first} = __writer.writeRawObjectEntry${nameKind}Int64(${first}, ${field.jsonNameExpr}, ${value})"
-        case "Int32" | "Int16" | "Int8" =>
-            "${first} = __writer.writeRawObjectEntry${nameKind}Int64(${first}, ${field.jsonNameExpr}, Int64(${value}))"
-        case "UInt64" =>
-            "${first} = __writer.writeRawObjectEntry${nameKind}UInt64(${first}, ${field.jsonNameExpr}, ${value})"
-        case "UInt32" | "UInt16" | "UInt8" =>
-            "${first} = __writer.writeRawObjectEntry${nameKind}UInt64(${first}, ${field.jsonNameExpr}, UInt64(${value}))"
-        case "Float64" =>
-            "${first} = __writer.writeRawObjectEntry${nameKind}Float64(${first}, ${field.jsonNameExpr}, ${value})"
-        case "Float32" | "Float16" =>
-            "${first} = __writer.writeRawObjectEntry${nameKind}Float64(${first}, ${field.jsonNameExpr}, Float64(${value}))"
-        case "Array<Int64>" =>
-            if (nameKind == "KnownName") {
-                return "${first} = __writer.writeRawObjectEntryKnownNameInt64Array(" +
-                    "${first}, ${field.jsonNameExpr}, ${value})"
-            }
-            "${first} = __writer.writeRawObjectEntry${nameKind}(${first}, ${field.jsonNameExpr}); " +
-            "if (!jsonTryWriteCompactInt64Array(writer, ${value})) { " +
-            "throw JsonException(\"Compact raw codec is unavailable\") }"
-        case "Array<Float64>" =>
-            if (nameKind == "KnownName") {
-                return "${first} = __writer.writeRawObjectEntryKnownNameFloat64Array(" +
-                    "${first}, ${field.jsonNameExpr}, ${value})"
-            }
-            "${first} = __writer.writeRawObjectEntry${nameKind}(${first}, ${field.jsonNameExpr}); " +
-            "if (!jsonTryWriteCompactFloat64Array(writer, ${value})) { " +
-            "throw JsonException(\"Compact raw codec is unavailable\") }"
-        case "Array<String>" =>
-            if (nameKind == "KnownName") {
-                return "${first} = __writer.writeRawObjectEntryKnownNameStringArray(" +
-                    "${first}, ${field.jsonNameExpr}, ${value})"
-            }
-            "${first} = __writer.writeRawObjectEntry${nameKind}(${first}, ${field.jsonNameExpr}); " +
-            "if (!jsonTryWriteCompactStringArray(writer, ${value})) { " +
-            "throw JsonException(\"Compact raw codec is unavailable\") }"
-        case "ArrayList<Int64>" =>
-            "${first} = __writer.writeRawObjectEntry${nameKind}(${first}, ${field.jsonNameExpr}); " +
-            "if (!jsonTryWriteCompactInt64ArrayList(writer, ${value})) { " +
-            "throw JsonException(\"Compact raw codec is unavailable\") }"
-        case "ArrayList<String>" =>
-            "${first} = __writer.writeRawObjectEntry${nameKind}(${first}, ${field.jsonNameExpr}); " +
-            "if (!jsonTryWriteCompactStringArrayList(writer, ${value})) { " +
-            "throw JsonException(\"Compact raw codec is unavailable\") }"
-        case "HashMap<String,Int64>" =>
-            if (nameKind == "KnownName") {
-                return "${first} = __writer.writeRawObjectEntryKnownNameInt64Map(" +
-                    "${first}, ${field.jsonNameExpr}, ${value})"
-            }
-            "${first} = __writer.writeRawObjectEntry${nameKind}(${first}, ${field.jsonNameExpr}); " +
-            "if (!jsonTryWriteCompactInt64Map(writer, ${value})) { " +
-            "throw JsonException(\"Compact raw codec is unavailable\") }"
-        case "HashMap<String,String>" =>
-            if (nameKind == "KnownName") {
-                return "${first} = __writer.writeRawObjectEntryKnownNameStringMap(" +
-                    "${first}, ${field.jsonNameExpr}, ${value})"
-            }
-            "${first} = __writer.writeRawObjectEntry${nameKind}(${first}, ${field.jsonNameExpr}); " +
-            "if (!jsonTryWriteCompactStringMap(writer, ${value})) { " +
-            "throw JsonException(\"Compact raw codec is unavailable\") }"
-        case "HashMap<String,Array<Int64>>" =>
-            if (nameKind == "KnownName") {
-                return "${first} = __writer.writeRawObjectEntryKnownNameInt64ArrayMap(" +
-                    "${first}, ${field.jsonNameExpr}, ${value})"
-            }
-            "${first} = __writer.writeRawObjectEntry${nameKind}(${first}, ${field.jsonNameExpr}); " +
-            "if (!jsonTryWriteCompactInt64ArrayMap(writer, ${value})) { " +
-            "throw JsonException(\"Compact raw codec is unavailable\") }"
-        case _ => compactRawPrimitiveContainerFieldWrite(field, value, first, nameKind)
-    }
-}
-
-private func primitiveRawValueWrite(typeText: String, value: String): String {
-    match (typeText.replace(" ", "")) {
-        case "Bool" => "GeneratedSupportV1.writeRawBool(__writer, ${value})"
-        case "Int8" | "Int16" | "Int32" | "Int64" =>
-            "GeneratedSupportV1.writeRawInt64(__writer, Int64(${value}))"
-        case "UInt8" | "UInt16" | "UInt32" | "UInt64" =>
-            "GeneratedSupportV1.writeRawUInt64(__writer, UInt64(${value}))"
-        case "Float16" | "Float32" | "Float64" =>
-            "GeneratedSupportV1.writeRawFloat64(__writer, Float64(${value}))"
-        case "String" => "GeneratedSupportV1.writeRawString(__writer, ${value})"
-        case _ => ""
-    }
-}
-
-private func collectionInnerType(typeText: String): String {
-    let normalized = typeText.replace(" ", "")
-    if (normalized.startsWith("Array<") && normalized.endsWith(">")) {
-        return normalized[6..normalized.size - 1]
-    }
-    if (normalized.startsWith("ArrayList<") && normalized.endsWith(">")) {
-        return normalized[10..normalized.size - 1]
-    }
+private func compactRawSpecializedFieldWrite(
+    field: CodecField,
+    value: String,
+    first: String
+): String {
+    let plan = FieldWritePlan(field)
+    let scalar = renderCompactCursorScalarField(plan, value, first)
+    if (!scalar.isEmpty()) { return scalar }
+    let container = renderCompactCursorContainerField(plan, value, first)
+    if (!container.isEmpty()) { return container }
     ""
 }
 
-private func compactRawPrimitiveArrayValue(
-    value: String,
-    innerType: String,
-    stem: String
-): String {
-    let itemWrite = primitiveRawValueWrite(innerType, "${value}[__rawIndex_${stem}]")
-    if (itemWrite.isEmpty()) { return "" }
-    "__writer.writeRawBeginArray(); " +
-        "for (__rawIndex_${stem} in 0..${value}.size) { " +
-        "if (__rawIndex_${stem} > 0) { __writer.writeRawByte(b',') }; " +
-        "${itemWrite} }; __writer.writeRawEndArray()"
-}
-
-private func compactRawPrimitiveContainerFieldWrite(
-    field: CodecField,
-    value: String,
-    first: String,
-    nameKind: String
-): String {
-    let normalized = field.typeText.replace(" ", "")
-    let innerType = collectionInnerType(normalized)
-    if (!innerType.isEmpty()) {
-        let body = compactRawPrimitiveArrayValue(value, innerType, field.name)
-        if (!body.isEmpty()) {
-            return "${first} = __writer.writeRawObjectEntry${nameKind}(${first}, " +
-                "${field.jsonNameExpr}); ${body}"
-        }
-    }
-
-    let mapPrefix = "HashMap<String,"
-    if (!normalized.startsWith(mapPrefix) || !normalized.endsWith(">")) { return "" }
-    let mapValueType = normalized[mapPrefix.size..normalized.size - 1]
-    let scalarWrite = primitiveRawValueWrite(mapValueType, "__rawMapItem_${field.name}")
-    if (!scalarWrite.isEmpty()) {
-        return "${first} = __writer.writeRawObjectEntry${nameKind}(${first}, " +
-            "${field.jsonNameExpr}); __writer.writeRawBeginObject(); " +
-            "var __rawMapFirst_${field.name} = true; " +
-            "for ((__rawMapName_${field.name}, __rawMapItem_${field.name}) in ${value}) { " +
-            "__rawMapFirst_${field.name} = __writer.writeRawObjectEntryName(" +
-            "__rawMapFirst_${field.name}, __rawMapName_${field.name}); ${scalarWrite} }; " +
-            "__writer.writeRawEndObject()"
-    }
-
-    let mapInnerType = collectionInnerType(mapValueType)
-    if (mapInnerType.isEmpty()) { return "" }
-    let arrayBody = compactRawPrimitiveArrayValue(
-        "__rawMapItems_${field.name}", mapInnerType, "map_${field.name}")
-    if (arrayBody.isEmpty()) { return "" }
-    "${first} = __writer.writeRawObjectEntry${nameKind}(${first}, ${field.jsonNameExpr}); " +
-        "__writer.writeRawBeginObject(); var __rawMapFirst_${field.name} = true; " +
-        "for ((__rawMapName_${field.name}, __rawMapItems_${field.name}) in ${value}) { " +
-        "__rawMapFirst_${field.name} = __writer.writeRawObjectEntryName(" +
-        "__rawMapFirst_${field.name}, __rawMapName_${field.name}); ${arrayBody} }; " +
-        "__writer.writeRawEndObject()"
-}
-
-private func compactRawCodecName(field: CodecField): String {
-    "__yJsonCompactRaw_${field.name}"
-}
-
-private func compactRawCursorCodecName(field: CodecField): String {
-    "__yJsonCompactRawCursor_${field.name}"
-}
-
 private func compactRawFieldWrite(field: CodecField, value: String, first: String): String {
-    let scalar = compactRawScalarFieldWrite(field, value, first)
-    if (!scalar.isEmpty()) { return scalar }
-    if (!directScalarWrite(field, value).isEmpty()) { return "" }
-    let nameKind = if (field.jsonNameExpr == "\"${field.name}\"") { "KnownName" } else { "Name" }
-    if (field.isOption && !field.includeNull) {
-        "if (${value}.isSome()) { ${first} = __writer.writeRawObjectEntry${nameKind}(" +
-            "${first}, ${field.jsonNameExpr}); match (${compactRawCursorCodecName(field)}) { " +
-            "case Some(__rawCursor) => __rawCursor.writeCompactWithCursor(${value}, writer, __writer); " +
-            "case None => match (${compactRawCodecName(field)}) { " +
-            "case Some(__raw) => __raw.writeCompactRaw(${value}, writer); " +
-            "case None => throw JsonException(\"Compact raw codec is unavailable\") } } }"
-    } else {
-        "${first} = __writer.writeRawObjectEntry${nameKind}(${first}, ${field.jsonNameExpr}); " +
-            "match (${compactRawCursorCodecName(field)}) { " +
-            "case Some(__rawCursor) => __rawCursor.writeCompactWithCursor(${value}, writer, __writer); " +
-            "case None => match (${compactRawCodecName(field)}) { " +
-            "case Some(__raw) => __raw.writeCompactRaw(${value}, writer); " +
-            "case None => throw JsonException(\"Compact raw codec is unavailable\") } }"
-    }
-}
-
-private func compactRawDirectWriterRewrite(value: String): String {
-    value
-        .replace("__directWriter.", "writer.")
-        .replace("__writer.", "writer.")
-        .replace(
-            "GeneratedSupportV1.writeRawBool(__writer,",
-            "GeneratedSupportV1.writeRawBool(writer,")
-        .replace(
-            "GeneratedSupportV1.writeRawInt64(__writer,",
-            "GeneratedSupportV1.writeRawInt64(writer,")
-        .replace(
-            "GeneratedSupportV1.writeRawUInt64(__writer,",
-            "GeneratedSupportV1.writeRawUInt64(writer,")
-        .replace(
-            "GeneratedSupportV1.writeRawFloat64(__writer,",
-            "GeneratedSupportV1.writeRawFloat64(writer,")
-        .replace(
-            "GeneratedSupportV1.writeRawString(__writer,",
-            "GeneratedSupportV1.writeRawString(writer,")
-}
-
-private func compactRawDirectFieldWrite(field: CodecField, value: String, first: String): String {
-    let scalar = compactRawScalarFieldWrite(field, value, first)
-    if (!scalar.isEmpty()) {
-        let direct = scalar.replace("__writer.", "__directWriter.")
-            .replace(
-                "writeRawObjectEntryKnownNameString(",
-                "writeRawObjectEntryKnownNameStringBuffer(")
-            .replace(
-                "writeRawObjectEntryKnownNameBool(",
-                "writeRawObjectEntryKnownNameBoolBuffer(")
-            .replace(
-                "writeRawObjectEntryKnownNameInt64(",
-                "writeRawObjectEntryKnownNameInt64Buffer(")
-            .replace(
-                "writeRawObjectEntryKnownNameUInt64(",
-                "writeRawObjectEntryKnownNameUInt64Buffer(")
-            .replace(
-                "writeRawObjectEntryKnownNameFloat64(",
-                "writeRawObjectEntryKnownNameFloat64Buffer(")
-            .replace(
-                "writeRawObjectEntryKnownNameInt64Array(",
-                "writeRawObjectEntryKnownNameInt64ArrayBuffer(")
-            .replace(
-                "writeRawObjectEntryKnownNameFloat64Array(",
-                "writeRawObjectEntryKnownNameFloat64ArrayBuffer(")
-            .replace(
-                "writeRawObjectEntryKnownNameStringArray(",
-                "writeRawObjectEntryKnownNameStringArray(")
-            .replace(
-                "writeRawObjectEntryKnownNameInt64Map(",
-                "writeRawObjectEntryKnownNameInt64MapBuffer(")
-            .replace(
-                "writeRawObjectEntryKnownNameStringMap(",
-                "writeRawObjectEntryKnownNameStringMapBuffer(")
-            .replace(
-                "writeRawObjectEntryKnownNameInt64ArrayMap(",
-                "writeRawObjectEntryKnownNameInt64ArrayMapBuffer(")
-        return direct
-    }
-    compactRawFieldWrite(field, value, first)
+    let specialized = compactRawSpecializedFieldWrite(field, value, first)
+    if (!specialized.isEmpty()) { return specialized }
+    renderCompactCursorCodecField(FieldWritePlan(field), value, first)
 }
 
 private func compactRawConcreteFieldWrite(
@@ -480,31 +214,24 @@ private func compactRawConcreteFieldWrite(
     first: String,
     genericNames: ArrayList<String>
 ): String {
-    let scalar = compactRawScalarFieldWrite(field, value, first)
+    let plan = FieldWritePlan(field)
+    let scalar = renderCompactDirectScalarField(plan, value, first, false)
     if (!scalar.isEmpty()) {
-        return compactRawDirectFieldWrite(field, value, first)
+        return scalar
+    }
+    let container = renderCompactDirectContainerField(plan, value, first)
+    if (!container.isEmpty()) {
+        return container
     }
     if (!field.codecExpr.isEmpty() || field.isOption) {
-        return compactRawDirectWriterRewrite(
-            compactRawFieldWrite(field, value, first))
+        return renderCompactDirectCodecField(plan, value, first, "__writer")
     }
     let concreteType = simpleGeneratedTypeName(field, genericNames)
     if (!concreteType.isEmpty()) {
-        let nameKind = if (field.jsonNameExpr == "\"${field.name}\"") { "KnownName" } else { "Name" }
-        return "${first} = writer.writeRawObjectEntry${nameKind}(${first}, ${field.jsonNameExpr}); " +
-            "__yJsonConcrete_${concreteType}.writeCompactRawWithWriter(${value}, writer)"
+        return renderCompactDirectConcreteField(plan, value, first, concreteType)
     }
-    let nameKind = if (field.jsonNameExpr == "\"${field.name}\"") { "KnownName" } else { "Name" }
-    let prefix = "${first} = writer.writeRawObjectEntry${nameKind}(${first}, ${field.jsonNameExpr}); "
-    let fallback = compactRawDirectWriterRewrite(
-        compactRawFieldWrite(field, value, first))
-    if (fallback.isEmpty()) { return "" }
-    let marker = "match (${compactRawCursorCodecName(field)}) { " +
-        "case Some(__rawCursor) => __rawCursor.writeCompactWithCursor(${value}, writer, GeneratedSupportV1.writeCursor(writer)); " +
-        "case None => "
-    let suffix = fallback
-        .replace(prefix, "")
-    prefix + marker + suffix + " }"
+    renderCompactDirectCodecField(
+        plan, value, first, "GeneratedSupportV1.writeCursor(writer)")
 }
 
 private func supportsStaticCompactRawWrite(fields: ArrayList<CodecField>): Bool {
@@ -591,37 +318,8 @@ private func generatedBufferAllScalar(fields: ArrayList<CodecField>): Bool {
     for (field in fields) {
         if (!field.writeField) { continue }
         hasField = true
-        if (!field.codecExpr.isEmpty() || field.isOption) { return false }
         if (field.jsonNameExpr != "\"${field.name}\"") { return false }
-        match (field.typeText.replace(" ", "")) {
-            case "Bool" | "Int8" | "Int16" | "Int32" | "Int64" |
-                 "UInt8" | "UInt16" | "UInt32" | "UInt64" |
-                 "Float16" | "Float32" | "Float64" | "String" => ()
-            case _ => return false
-        }
-    }
-    hasField
-}
-
-private func generatedBufferContainerType(typeText: String): Bool {
-    match (typeText.replace(" ", "")) {
-        case "Array<Int64>" | "Array<Float64>" | "Array<String>" |
-             "HashMap<String,Int64>" | "HashMap<String,String>" |
-             "HashMap<String,Array<Int64>>" => true
-        case _ => false
-    }
-}
-
-private func generatedBufferAllContainer(fields: ArrayList<CodecField>): Bool {
-    var hasField = false
-    for (field in fields) {
-        if (!field.writeField) { continue }
-        hasField = true
-        if (!field.codecExpr.isEmpty() || field.isOption ||
-            field.jsonNameExpr != "\"${field.name}\"" ||
-            !generatedBufferContainerType(field.typeText)) {
-            return false
-        }
+        if (!FieldWritePlan(field).supportsScalarBatch()) { return false }
     }
     hasField
 }
@@ -1232,7 +930,7 @@ private func renderCodec(decl: Decl, body: Body, isClass: Bool): Tokens {
     // context checks only decide path tracking around nested field writes.
     var compactHasDirectField = false
     for (field in fields) {
-        if (field.writeField && !compactRawScalarFieldWrite(field, "__value", "__first").isEmpty()) {
+        if (field.writeField && !compactRawSpecializedFieldWrite(field, "__value", "__first").isEmpty()) {
             compactHasDirectField = true
             break
         }
@@ -1263,7 +961,7 @@ private func renderCodec(decl: Decl, body: Body, isClass: Bool): Tokens {
             if (needsCursorFastCodec) {
                 appendLine(sb, 1, "private let ${cachedCursorFastFieldCodecName(field)}: Option<GeneratedCursorReadCodecV1<${field.typeText}>> = match (${cachedFieldCodecName(field)}) { case __fast: GeneratedCursorReadCodecV1<${field.typeText}> => Some(__fast); case _ => None<GeneratedCursorReadCodecV1<${field.typeText}>> }")
             }
-            if (compactRawScalarFieldWrite(field, "__value", "__first").isEmpty() &&
+            if (compactRawSpecializedFieldWrite(field, "__value", "__first").isEmpty() &&
                 directScalarWrite(field, "__value").isEmpty()) {
                 appendLine(sb, 1, "private let ${compactRawCodecName(field)}: Option<GeneratedCompactWriteCodecV1<${field.typeText}>> = match (${cachedFieldCodecName(field)}) { case __raw: GeneratedCompactWriteCodecV1<${field.typeText}> => Some(__raw); case _ => None<GeneratedCompactWriteCodecV1<${field.typeText}>> }")
                 appendLine(sb, 1, "private let ${compactRawCursorCodecName(field)}: Option<GeneratedCursorWriteCodecV1<${field.typeText}>> = match (${cachedFieldCodecName(field)}) { case __rawCursor: GeneratedCursorWriteCodecV1<${field.typeText}> => Some(__rawCursor); case _ => None<GeneratedCursorWriteCodecV1<${field.typeText}>> }")
@@ -1329,7 +1027,7 @@ private func renderCodec(decl: Decl, body: Body, isClass: Bool): Tokens {
     let rawChecks = ArrayList<String>()
         for (field in fields) {
             if (!field.writeField) { continue }
-            if (compactRawScalarFieldWrite(field, "__value", "__first").isEmpty() &&
+            if (compactRawSpecializedFieldWrite(field, "__value", "__first").isEmpty() &&
                 directScalarWrite(field, "__value").isEmpty()) {
                 rawChecks.add("match (${compactRawCursorCodecName(field)}) { " +
                     "case Some(__rawCursor) => __rawCursor.supportsCompactCursorWrite(); " +
@@ -1367,9 +1065,7 @@ private func renderCodec(decl: Decl, body: Body, isClass: Bool): Tokens {
         var compactNeedsWriterCursor = false
         for (field in fields) {
             if (!field.writeField) { continue }
-            let rawWrite = compactRawConcreteFieldWrite(
-                field, "value.${field.name}", "__first", generics)
-            if (rawWrite.contains("__rawCursor")) {
+            if (FieldWritePlan(field).needsCachedDirectCursor()) {
                 compactNeedsWriterCursor = true
                 break
             }
@@ -1395,79 +1091,25 @@ private func renderCodec(decl: Decl, body: Body, isClass: Bool): Tokens {
             appendLine(sb, 2, "let __writer = writer.generatedCursorV1()")
         }
         let scalarBufferBatch = generatedBufferAllScalar(fields)
-        let containerBufferBatch = generatedBufferAllContainer(fields)
-        appendLine(sb, 2, if (scalarBufferBatch || containerBufferBatch) {
-            "writer.writeRawBeginObject()"
-        } else {
-            "writer.writeRawBeginObject()"
-        })
+        appendLine(sb, 2, "writer.writeRawBeginObject()")
         appendLine(sb, 2, "var __first = true")
         for (field in fields) {
             if (!field.writeField) {
                 continue
             }
-            let rawWrite = compactRawConcreteFieldWrite(
-                field, "value.${field.name}", "__first", generics)
-            var concreteRawWrite = rawWrite
-            if (scalarBufferBatch) {
-                concreteRawWrite = concreteRawWrite
-                    .replace(
-                        "__directWriter.writeRawObjectEntryKnownNameStringBuffer(",
-                        "writer.writeRawObjectEntryKnownNameStringFast("
-                    )
-                    .replace(
-                        "__directWriter.writeRawObjectEntryKnownNameInt64Buffer(",
-                        "__buffer.writeObjectEntryNameInt64NoEscapeFast("
-                    )
-                    .replace(
-                        "__directWriter.writeRawObjectEntryKnownNameUInt64Buffer(",
-                        "__buffer.writeObjectEntryNameUInt64NoEscapeFast("
-                    )
-                    .replace(
-                        "__directWriter.writeRawObjectEntryKnownNameFloat64Buffer(",
-                        "__buffer.writeObjectEntryNameFloat64NoEscapeFast("
-                    )
-                    .replace(
-                        "__directWriter.writeRawObjectEntryKnownNameBoolBuffer(",
-                        "__buffer.writeObjectEntryNameBoolNoEscapeFast("
-                    )
+            let scalarRawWrite = renderCompactDirectScalarField(
+                FieldWritePlan(field), "value.${field.name}", "__first", scalarBufferBatch)
+            let rawWrite = if (scalarRawWrite.isEmpty()) {
+                compactRawConcreteFieldWrite(
+                    field, "value.${field.name}", "__first", generics)
+            } else {
+                scalarRawWrite
             }
-            if (containerBufferBatch) {
-                concreteRawWrite = concreteRawWrite
-                    .replace(
-                        "__directWriter.writeRawObjectEntryKnownNameInt64ArrayBuffer(",
-                        "writer.writeRawObjectEntryKnownNameInt64ArrayBuffer("
-                    )
-                    .replace(
-                        "__directWriter.writeRawObjectEntryKnownNameInt64MapBuffer(",
-                        "writer.writeRawObjectEntryKnownNameInt64MapBuffer("
-                    )
-                    .replace(
-                        "__directWriter.writeRawObjectEntryKnownNameInt64ArrayMapBuffer(",
-                        "writer.writeRawObjectEntryKnownNameInt64ArrayMapBuffer("
-                    )
-            }
-            if (scalarBufferBatch || containerBufferBatch) {
-                // Canonical names are compile-time String literals. Use the
-                // String overloads on the concrete target so the hot path can
-                // copy the literal's raw bytes directly instead of invoking
-                // Array<Byte>.copyTo for every field.
-                for (fieldName in fields) {
-                    if (fieldName.writeField &&
-                        fieldName.jsonNameExpr == "\"${fieldName.name}\"") {
-                        concreteRawWrite = concreteRawWrite.replace(
-                            generatedKnownNameBytesName(fieldName),
-                            fieldName.jsonNameExpr
-                        )
-                    }
-                }
-            }
-            concreteRawWrite = compactRawDirectWriterRewrite(concreteRawWrite)
             if (compactRawFieldNeedsContext(field, generics)) {
                 appendLine(sb, 2, "context.pushField(${field.jsonNameExpr})")
-                appendLine(sb, 2, "try { ${concreteRawWrite} } finally { context.popPath() }")
+                appendLine(sb, 2, "try { ${rawWrite} } finally { context.popPath() }")
             } else {
-                appendLine(sb, 2, concreteRawWrite)
+                appendLine(sb, 2, rawWrite)
             }
         }
         appendLine(sb, 3, "writer.writeRawEndObject()")
