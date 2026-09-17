@@ -1,0 +1,17 @@
+[package]
+cjc-version = "1.1.0"
+name = "yjson_macros_characterization"
+organization = ""
+description = "Consumer-level characterization tests for yjson_macros"
+version = "0.1.0"
+target-dir = ""
+script-dir = ""
+output-type = "executable"
+compile-option = "-Woff unused"
+override-compile-option = ""
+link-option = ""
+package-configuration = {}
+
+[dependencies]
+yjson = { path = "__YJSON_RUNTIME__" }
+yjson_macros = { path = "__YJSON_MACROS__" }
