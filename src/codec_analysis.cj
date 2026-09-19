@@ -309,3 +309,60 @@ internal func genericNames(decl: Decl): ArrayList<String> {
     } catch (_: ASTException) {}
     result
 }
+
+internal func analyzePolymorphicCodec(
+    decl: ClassDecl,
+    wrappedSubtypeExpressions: ArrayList<String>,
+    wrappedDiscriminatorArguments: ArrayList<String>
+): PolymorphicCodecModel {
+    let name = decl.identifier.value
+    let visibility = if (hasModifier(decl, TokenKind.PUBLIC)) { "public " } else { "" }
+    let fields = collectFields(decl.body)
+    let generics = genericNames(decl)
+    let genericText = genericDecl(generics)
+    let targetType = name + genericText
+    let constraints = renderedConstraints(decl, fields, generics)
+    let codecName = "__YJsonCodec_${name}"
+    let discriminatorArgs = annotationArguments(decl, "JsonPolymorphic")
+    discriminatorArgs.add(all: wrappedDiscriminatorArguments)
+    let discriminator = if (discriminatorArgs.isEmpty()) {
+        "\"type\""
+    } else {
+        namedArgumentValue(discriminatorArgs[0])
+    }
+
+    let subtypes = ArrayList<PolymorphicSubtype>()
+    let seenWireNames = HashSet<String>()
+    let encodedSubtypes = annotationArguments(decl, "JsonSubtypeMetadata")
+    encodedSubtypes.add(all: wrappedSubtypeExpressions)
+    for (encoded in encodedSubtypes) {
+        let subtype = parseSubtypeExpression(encoded)
+        if (seenWireNames.contains(subtype.wireNameExpr)) {
+            throw Exception("duplicate polymorphic discriminator ${subtype.wireNameExpr}")
+        }
+        seenWireNames.add(subtype.wireNameExpr)
+        subtypes.add(subtype)
+    }
+    if (subtypes.isEmpty()) {
+        throw Exception("@JsonPolymorphic requires at least one @JsonSubtype[wireName, ConcreteType]")
+    }
+    for (field in fields) {
+        if (field.jsonNameExpr == discriminator) {
+            throw Exception("polymorphic discriminator conflicts with JSON field ${discriminator}")
+        }
+    }
+
+    PolymorphicCodecModel(
+        visibility,
+        name,
+        fields,
+        generics,
+        genericText,
+        targetType,
+        constraints,
+        codecName,
+        "${name}Json",
+        discriminator,
+        subtypes
+    )
+}
