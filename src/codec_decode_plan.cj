@@ -2,6 +2,145 @@ macro package yjson_macros
 
 import std.collection.*
 
+private func semanticReadTemplate(field: CodecField): String {
+    if (field.capabilities.usesCustomCodec) { return "" }
+    let reader = "__YJSON_FIELD_READER__"
+    let primitiveRead = match (field.capabilities.typeShape.primitive) {
+        case PrimitiveFieldKind.BoolValue => "${reader}.readBool()"
+        case PrimitiveFieldKind.Int64Value => "${reader}.readInt64()"
+        case PrimitiveFieldKind.UInt64Value => "${reader}.readUInt64()"
+        case PrimitiveFieldKind.Float64Value => "${reader}.readFloat64()"
+        case PrimitiveFieldKind.StringValue => "${reader}.readString()"
+        case PrimitiveFieldKind.BigIntValue => "${reader}.readBigInt()"
+        case PrimitiveFieldKind.DecimalValue => "${reader}.readDecimal()"
+        case _ => ""
+    }
+    if (!primitiveRead.isEmpty()) { return primitiveRead }
+    match (field.capabilities.typeShape.normalized) {
+        case "ArrayList<String>" => "__yJsonReadStringArrayList(${reader})"
+        case "HashMap<String,Int64>" => "__yJsonReadInt64HashMap(${reader})"
+        case "Option<String>" => "__yJsonReadStringOption(${reader})"
+        case "Option<Int64>" => "__yJsonReadInt64Option(${reader})"
+        case _ => ""
+    }
+}
+
+private func directFastReadTemplate(field: CodecField): String {
+    if (field.capabilities.usesCustomCodec) { return "" }
+    let reader = "__YJSON_FIELD_READER__"
+    let primitiveRead = match (field.capabilities.typeShape.primitive) {
+        case PrimitiveFieldKind.BoolValue => "${reader}.readRawBool()"
+        case PrimitiveFieldKind.Int64Value => "${reader}.readRawInt64()"
+        case PrimitiveFieldKind.Int32Value => "${reader}.readRawInt32()"
+        case PrimitiveFieldKind.Int16Value => "${reader}.readRawInt16()"
+        case PrimitiveFieldKind.Int8Value => "${reader}.readRawInt8()"
+        case PrimitiveFieldKind.UInt64Value => "${reader}.readRawUInt64()"
+        case PrimitiveFieldKind.UInt32Value => "${reader}.readRawUInt32()"
+        case PrimitiveFieldKind.UInt16Value => "${reader}.readRawUInt16()"
+        case PrimitiveFieldKind.UInt8Value => "${reader}.readRawUInt8()"
+        case PrimitiveFieldKind.StringValue => "${reader}.readRawString()"
+        case PrimitiveFieldKind.DecimalValue => "jsonFastReadDecimal(${reader})"
+        case PrimitiveFieldKind.Float64Value => "jsonFastReadFloat64(${reader})"
+        case PrimitiveFieldKind.Float32Value => "jsonFastReadFloat32(${reader})"
+        case PrimitiveFieldKind.Float16Value => "jsonFastReadFloat16(${reader})"
+        case _ => ""
+    }
+    if (!primitiveRead.isEmpty()) { return primitiveRead }
+    match (field.capabilities.typeShape.normalized) {
+        case "ArrayList<String>" => "__yJsonReadFastStringArrayList(${reader})"
+        case "HashMap<String,Int64>" => "__yJsonReadFastInt64HashMap(${reader})"
+        case "Option<String>" => "__yJsonReadFastStringOption(${reader})"
+        case "Option<Int64>" => "__yJsonReadFastInt64Option(${reader})"
+        case "ArrayList<BigInt>" => "__yJsonReadFastArrayListBigInt(${reader})"
+        case "HashMap<String,BigInt>" => "__yJsonReadFastHashMapStringBigInt(${reader})"
+        case "ArrayList<Decimal>" => "__yJsonReadFastArrayListDecimal(${reader})"
+        case "HashMap<String,Decimal>" => "__yJsonReadFastHashMapStringDecimal(${reader})"
+        case _ => ""
+    }
+}
+
+private func cursorFastReadTemplate(field: CodecField, directFastTemplate: String): String {
+    if (field.capabilities.usesCustomCodec) { return "" }
+    let primitiveRead = match (field.capabilities.typeShape.primitive) {
+        case PrimitiveFieldKind.BoolValue => "__reader.readRawBool()"
+        case PrimitiveFieldKind.Int64Value => "__reader.readRawInt64()"
+        case PrimitiveFieldKind.Int32Value => "__reader.readRawInt32()"
+        case PrimitiveFieldKind.Int16Value => "__reader.readRawInt16()"
+        case PrimitiveFieldKind.Int8Value => "__reader.readRawInt8()"
+        case PrimitiveFieldKind.UInt64Value => "__reader.readRawUInt64()"
+        case PrimitiveFieldKind.UInt32Value => "__reader.readRawUInt32()"
+        case PrimitiveFieldKind.UInt16Value => "__reader.readRawUInt16()"
+        case PrimitiveFieldKind.UInt8Value => "__reader.readRawUInt8()"
+        case PrimitiveFieldKind.StringValue => "__reader.readRawString()"
+        case PrimitiveFieldKind.Float64Value => "__reader.readRawFloat64()"
+        case PrimitiveFieldKind.Float32Value => "__reader.readRawFloat32()"
+        case PrimitiveFieldKind.Float16Value => "__reader.readRawFloat16()"
+        case _ => ""
+    }
+    if (!primitiveRead.isEmpty()) { return primitiveRead }
+    match (field.capabilities.typeShape.normalized) {
+        case "Array<Int64>" => "__reader.readRawInt64Array()"
+        case "Array<String>" => "__reader.readRawStringArray()"
+        case "HashMap<String,Int64>" => "__reader.readRawInt64Map()"
+        case "HashMap<String,String>" => "__reader.readRawStringMap()"
+        case "HashMap<String,Array<Int64>>" => "__reader.readRawInt64ArrayMap()"
+        case "Option<Int64>" =>
+            "if (__reader.tryReadRawNull()) { None<Int64> } else { Some(__reader.readRawInt64()) }"
+        case "Option<String>" =>
+            "if (__reader.tryReadRawNull()) { None<String> } else { Some(__reader.readRawString()) }"
+        case _ => directFastTemplate
+    }
+}
+
+internal func fieldSpecializedOperationNeedsContext(field: CodecField): Bool {
+    let normalized = field.capabilities.typeShape.normalized
+    normalized == "ArrayList<String>" || normalized == "HashMap<String,Int64>" ||
+        normalized == "HashMap<String,String>" || normalized == "HashMap<String,Array<Int64>>" ||
+        normalized == "Option<String>" || normalized == "ArrayList<BigInt>" ||
+        normalized == "HashMap<String,BigInt>" || normalized == "ArrayList<Decimal>" ||
+        normalized == "HashMap<String,Decimal>"
+}
+
+internal class FieldReadPlan {
+    let field: CodecField
+    private let semanticTemplate: String
+    private let directFastTemplate: String
+    private let cursorFastTemplate: String
+    let semanticNeedsContext: Bool
+    let directFastNeedsContext: Bool
+    let cursorFastNeedsContext: Bool
+    let needsDirectFastCodec: Bool
+    let needsCursorFastCodec: Bool
+
+    init(field: CodecField) {
+        this.field = field
+        semanticTemplate = semanticReadTemplate(field)
+        directFastTemplate = directFastReadTemplate(field)
+        cursorFastTemplate = cursorFastReadTemplate(field, directFastTemplate)
+        let specializedNeedsContext = fieldSpecializedOperationNeedsContext(field)
+        semanticNeedsContext = semanticTemplate.isEmpty() || specializedNeedsContext
+        directFastNeedsContext = directFastTemplate.isEmpty() || specializedNeedsContext
+        cursorFastNeedsContext = cursorFastTemplate.isEmpty() || specializedNeedsContext
+        needsDirectFastCodec = directFastTemplate.isEmpty()
+        needsCursorFastCodec = cursorFastTemplate.isEmpty()
+    }
+
+    func semanticRead(reader: String): String {
+        semanticTemplate.replace("__YJSON_FIELD_READER__", reader)
+    }
+
+    func directFastRead(reader: String): String {
+        directFastTemplate.replace("__YJSON_FIELD_READER__", reader)
+    }
+
+    func cursorFastRead(): String {
+        cursorFastTemplate.replace("__YJSON_FIELD_READER__", "reader")
+    }
+
+    func hasDirectSemanticRead(): Bool { !semanticTemplate.isEmpty() }
+    func hasDirectFastRead(): Bool { !directFastTemplate.isEmpty() }
+}
+
 internal class CanonicalFieldOrderPlan {
     let fieldCount: Int64
     let lastFieldName: String

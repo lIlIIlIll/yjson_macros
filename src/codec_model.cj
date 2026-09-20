@@ -103,6 +103,46 @@ internal class PolymorphicSubtype {
     }
 }
 
+internal class PolymorphicCodecModel {
+    let visibility: String
+    let name: String
+    let fields: ArrayList<CodecField>
+    let genericNames: ArrayList<String>
+    let genericText: String
+    let targetType: String
+    let constraints: String
+    let codecName: String
+    let codecProviderName: String
+    let discriminator: String
+    let subtypes: ArrayList<PolymorphicSubtype>
+
+    init(
+        visibility: String,
+        name: String,
+        fields: ArrayList<CodecField>,
+        genericNames: ArrayList<String>,
+        genericText: String,
+        targetType: String,
+        constraints: String,
+        codecName: String,
+        codecProviderName: String,
+        discriminator: String,
+        subtypes: ArrayList<PolymorphicSubtype>
+    ) {
+        this.visibility = visibility
+        this.name = name
+        this.fields = fields
+        this.genericNames = genericNames
+        this.genericText = genericText
+        this.targetType = targetType
+        this.constraints = constraints
+        this.codecName = codecName
+        this.codecProviderName = codecProviderName
+        this.discriminator = discriminator
+        this.subtypes = subtypes
+    }
+}
+
 internal class ObjectCodecModel {
     let declaration: Decl
     let name: String
@@ -116,6 +156,9 @@ internal class ObjectCodecModel {
     let inheritedObjectType: String
     let isClass: Bool
     let staticCompact: Bool
+    let readPlans = ArrayList<FieldReadPlan>()
+    let fastLabels = ArrayList<(FieldReadPlan, String)>()
+    let fastLabelBytes = ArrayList<String>()
 
     init(
         declaration: Decl,
@@ -143,5 +186,15 @@ internal class ObjectCodecModel {
         this.inheritedObjectType = inheritedObjectType
         this.isClass = isClass
         this.staticCompact = staticCompact
+        for (field in fields) {
+            let readPlan = FieldReadPlan(field)
+            readPlans.add(readPlan)
+            fastLabels.add((readPlan, field.jsonNameExpr))
+            fastLabelBytes.add("(${field.jsonNameExpr}).rawData()")
+            for (alias in field.aliases) {
+                fastLabels.add((readPlan, alias))
+                fastLabelBytes.add("(${alias}).rawData()")
+            }
+        }
     }
 }
