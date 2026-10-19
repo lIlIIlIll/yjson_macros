@@ -8,7 +8,7 @@
 
 ## 验证
 
-- 按当前 Cangjie SDK 编译生成宏和真实 consumer；运行 `tests/run_characterization.py` 中受影响的测试路径，并保留生成代码的成功与 compile-fail 样例。运行命令前核对脚本当前参数和 SDK 环境。
+- 按当前 Cangjie SDK 编译生成宏和真实 consumer；运行 `python3 tests/run_characterization.py --runtime ../yjson`（本地存在匹配版本的相邻 runtime checkout 时），或按脚本帮助选择受支持的参数。脚本仅支持 `--runtime` 与 `--consumer-only`，**不支持按测试路径选择**；默认运行完整 runtime 和 consumer 测试，`--consumer-only` 会跳过 runtime 测试，不能宣称完整验证。
 - 功能变更应覆盖 class/struct/enum、多态子类型、自定义 codec、重复动态键、插值顺序及非法语法，不把单一构建通过当作兼容性证明。
 
 ## Code Review 专项不变量
