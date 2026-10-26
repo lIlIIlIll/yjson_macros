@@ -490,7 +490,7 @@ private func appendMutableObjectFastRead(
     appendLine(sb, 2, "let context = GeneratedSupportV1.readState(reader)")
     if (fastReadContext) { appendLine(sb, 2, "context.enterValue()") }
     appendLine(sb, 2, "try {")
-    appendLine(sb, 3, "let __result = ${targetType}()")
+    appendLine(sb, 3, "var __result = ${targetType}()")
     for (plan in readPlans) {
         let field = plan.field
         if (field.writeField) {
