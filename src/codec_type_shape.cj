@@ -44,7 +44,7 @@ internal class FieldTypeShape {
                  "UInt8" | "UInt16" | "UInt32" | "UInt64" |
                  "Float16" | "Float32" | "Float64" | "Rune" | "String" |
                  "BigInt" | "Decimal" | "DateTime" | "Duration" |
-                 "JsonNode" | "JsonValue" | "JsonValueView" => true
+                 "JsonNode" | "JsonValueView" => true
             case _ => false
         }
     }

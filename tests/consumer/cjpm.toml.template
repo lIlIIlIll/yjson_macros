@@ -1,5 +1,5 @@
 [package]
-cjc-version = "1.1.0"
+cjc-version = "1.2.0"
 name = "yjson_macros_characterization"
 organization = ""
 description = "Consumer-level characterization tests for yjson_macros"

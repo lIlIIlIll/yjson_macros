@@ -328,13 +328,13 @@ internal func appendDecodedResult(
         for (param in params) {
             args.add(decodedConstructorArgument(param, fields, allFieldsSeen))
         }
-        appendLine(sb, level, "let __result = ${targetType}(" + joinStrings(args, ", ") + ")")
+        appendLine(sb, level, "var __result = ${targetType}(" + joinStrings(args, ", ") + ")")
         appendPostConstructorAssignments(sb, level, fields, params, allFieldsSeen)
         appendLine(sb, level, "return __result")
         return
     }
 
-    appendLine(sb, level, "let __result = ${targetType}()")
+    appendLine(sb, level, "var __result = ${targetType}()")
     appendPostConstructorAssignments(sb, level, fields, params, allFieldsSeen)
     appendLine(sb, level, "return __result")
 }

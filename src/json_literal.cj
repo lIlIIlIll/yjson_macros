@@ -450,14 +450,32 @@ private func parseJsonLiteral(input: Tokens): JsonLiteralDocument {
     JsonLiteralParser(input).parse()
 }
 
-/// Builds a mutable JsonNode tree from JSON-like literal syntax. Runtime values
-/// and dynamic String keys use $(). Every interpolation is evaluated once from
-/// left to right; dynamic object-key collisions use LastWins.
+/**
+ * 从 JSON 字面量构造可修改的 `JsonNode` 树。
+ *
+ * 静态部分支持对象、数组、双引号字符串、布尔值、`null` 和严格 JSON 数字。
+ * 对象成员之间必须有逗号，可以有尾逗号。静态重复键在编译时报错。
+ * 使用 `$()` 插入运行时值或 `String` 类型的动态键。插值从左到右各求值一次，
+ * 动态键冲突时保留最后一个成员。插值值通过当前运行时的 codec 转换。
+ * 生成代码的消费方需要导入 `yjson.*` 和 `yjson_macros.*`。
+ *
+ * @param input 字面量表达式的词法单元，不含宏调用的外层括号。
+ * @return 构造 `JsonNode` 的表达式词法单元。
+ * @throws Exception 静态 JSON 语法、数字、键或插值语法无效时，在宏展开阶段抛出。
+ * @example 对象和运行时插值 {run}
+ * 完整前置模型和运行命令见 `tests/doc_examples/README.md`。
+ * ```cangjie
+ * let key = "score"
+ * let value = @Json({"name": "Ada", $(key): $(7), "flags": [true, null]})
+ * if (value.toJson() != "{\"name\":\"Ada\",\"score\":7,\"flags\":[true,null]}") {
+ *     throw Exception("JSON literal result mismatch")
+ * }
+ * println(value.toJson())
+ * ```
+ * ```output
+ * {"name":"Ada","score":7,"flags":[true,null]}
+ * ```
+ */
 public macro Json(input: Tokens): Tokens {
-    JsonLiteralRenderer().render(parseJsonLiteral(input))
-}
-
-/// Explicit alias for callers migrating from the former literal macro name.
-public macro JsonValue(input: Tokens): Tokens {
     JsonLiteralRenderer().render(parseJsonLiteral(input))
 }

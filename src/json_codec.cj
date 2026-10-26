@@ -490,7 +490,7 @@ private func appendMutableObjectFastRead(
     appendLine(sb, 2, "let context = GeneratedSupportV1.readState(reader)")
     if (fastReadContext) { appendLine(sb, 2, "context.enterValue()") }
     appendLine(sb, 2, "try {")
-    appendLine(sb, 3, "let __result = ${targetType}()")
+    appendLine(sb, 3, "var __result = ${targetType}()")
     for (plan in readPlans) {
         let field = plan.field
         if (field.writeField) {
@@ -1361,6 +1361,31 @@ private func renderPolymorphicCodec(model: PolymorphicCodecModel): Tokens {
     cangjieLex(sb.toString())
 }
 
+/**
+ * 为 class、struct 或 enum 声明生成 JSON codec 和 `generated-support v1` 提供方。
+ *
+ * 对象字段必须声明类型。字段名、别名、默认值、空值和自定义 codec 由声明上的
+ * JSON 标注决定。枚举保留构造项及其关联值；多态 class 通过 `JsonPolymorphic`
+ * 和 `JsonSubtype` 选择判别字段及子类型。宏保留输入声明，并在同一作用域追加生成声明。
+ * 生成代码的消费方需要导入 `yjson.*` 和 `yjson_macros.*`，并使用配套运行时。
+ * 生成的读写入口遵守运行时的选项、预算、错误路径和资源释放规则。
+ *
+ * @param input class、struct 或 enum 声明，可以带 JSON 元数据包装。
+ * @return 原声明和生成 codec、提供方声明的词法单元。
+ * @throws Exception 声明类型不支持、字段缺少类型、JSON 名称重复或多态配置无效时，
+ * 在宏展开阶段抛出。无效声明也可能由 `std.ast` 的解析异常拒绝。
+ * @example 生成对象 codec 并往返转换 {run}
+ * 完整前置模型和运行命令见 `tests/doc_examples/README.md`；`DocRecord` 已标注 `@JsonCodec`。
+ * ```cangjie
+ * let text = YJson.toJson(DocRecord(7, "Ada"))
+ * let value = YJson.fromJson(text, codec: DocRecordJson)
+ * if (value.id != 7 || value.name != "Ada") { throw Exception("codec round trip mismatch") }
+ * println(text)
+ * ```
+ * ```output
+ * {"id":7,"name":"Ada"}
+ * ```
+ */
 public macro JsonCodec(input: Tokens): Tokens {
     var decl = parseDecl(input)
     let wrappedSubtypeExpressions = ArrayList<String>()
@@ -1405,6 +1430,29 @@ public macro JsonCodec(input: Tokens): Tokens {
     input + Token(TokenKind.NL).toTokens() + generated
 }
 
+/**
+ * 为 `JsonCodec` 处理的字段指定自定义 codec 表达式。
+ *
+ * 本宏把属性词法单元保存为 `JsonUsingMetadata`，并保留被标注声明。
+ * 外层 `JsonCodec` 生成代码时使用该表达式；表达式必须产生与字段类型匹配的 codec。
+ * 本宏不验证表达式的类型，也不主动抛出业务异常。非法表达式和类型不匹配由编译器拒绝；
+ * codec 自身的运行时异常由生成的读写入口传播。
+ *
+ * @param attrs 方括号中的 codec 表达式词法单元。
+ * @param input 被标注的字段声明词法单元。
+ * @return 带 `JsonUsingMetadata` 的原声明词法单元。
+ * @example 为数组字段选择 codec {run}
+ * 完整前置模型和运行命令见 `tests/doc_examples/README.md`；`DocCustomCodec.values` 使用 `@JsonUsing`。
+ * ```cangjie
+ * let text = YJson.toJson(DocCustomCodec([1, 2, 3]))
+ * let value = YJson.fromJson<DocCustomCodec>(text)
+ * if (value.values.size != 3 || value.values[2] != 3) { throw Exception("custom codec mismatch") }
+ * println(text)
+ * ```
+ * ```output
+ * {"values":[1,2,3]}
+ * ```
+ */
 public macro JsonUsing(attrs: Tokens, input: Tokens): Tokens {
     let expression = Token(TokenKind.STRING_LITERAL, attrs.toString().trimAscii())
     quote(
@@ -1413,6 +1461,34 @@ public macro JsonUsing(attrs: Tokens, input: Tokens): Tokens {
     )
 }
 
+/**
+ * 在多态基类上登记 JSON 判别值与具体子类型。
+ *
+ * 属性按 `"判别值", 具体类型` 排列。本宏保存为 `JsonSubtypeMetadata`，
+ * 并保留输入声明，供外层 `JsonCodec` 生成多态 codec。基类需要 `JsonPolymorphic` 标注；
+ * 各判别值必须唯一，具体类型必须满足生成代码的继承和 codec 约束。
+ * 本宏不主动抛出业务异常。缺少子类型、重复判别值和字段冲突由外层宏拒绝；
+ * 类型约束由编译器检查，未知运行时判别值由运行时报告 `JsonException`。
+ *
+ * @param attrs 方括号中的字符串判别值和具体类型词法单元。
+ * @param input 被标注的多态基类声明词法单元。
+ * @return 带 `JsonSubtypeMetadata` 的原声明词法单元。
+ * @example 按判别值还原具体子类型 {run}
+ * 完整前置模型和运行命令见 `tests/doc_examples/README.md`；`DocAnimal` 使用 `@JsonSubtype["dog", DocDog]`。
+ * ```cangjie
+ * let animal: DocAnimal = DocDog(5, "woof")
+ * let text = YJson.toJson(animal)
+ * match (YJson.fromJson<DocAnimal>(text)) {
+ *     case dog: DocDog =>
+ *         if (dog.id != 5 || dog.bark != "woof") { throw Exception("subtype value mismatch") }
+ *     case _ => throw Exception("subtype not restored")
+ * }
+ * println(text)
+ * ```
+ * ```output
+ * {"kind":"dog","id":5,"bark":"woof"}
+ * ```
+ */
 public macro JsonSubtype(attrs: Tokens, input: Tokens): Tokens {
     let expression = Token(TokenKind.STRING_LITERAL, attrs.toString().trimAscii())
     quote(

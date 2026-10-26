@@ -2,11 +2,11 @@
 
 ## Goal
 
-Reduce the maintenance risk identified in `clean-code-audit.md` without changing the public macro surface, generated JSON behavior, error contracts, or supported runtime protocol. Each task below is intended to be reviewable on its own. A task may add private files and types, but it must not introduce a public abstraction only to reduce line count.
+Reduce the maintenance risk identified in `clean-code-audit.md` while preserving the public surface selected for the target version, generated JSON behavior, error contracts, and the current runtime protocol. Public removals require separate approval. The 0.x series makes no cross-version compatibility guarantee. Each task below is intended to be reviewable on its own. A task may add private files and types, but it must not introduce a public abstraction only to reduce line count.
 
 ## Constraints
 
-- Preserve `@JsonCodec`, `@Json`, `@JsonValue`, `@JsonUsing`, and `@JsonSubtype` behavior.
+- Preserve the current `@JsonCodec`, `@Json`, `@JsonUsing`, and `@JsonSubtype` behavior. `@JsonValue` was removed in 0.2.0; it is not a compatibility requirement.
 - Preserve the generated-support v1 contract until a separate compatibility change explicitly versions it.
 - Keep the macro package independent from a compile-time import of the `yjson` runtime package.
 - Compare public behavior through compiled consumers. Do not rely only on generated-source snapshots.
