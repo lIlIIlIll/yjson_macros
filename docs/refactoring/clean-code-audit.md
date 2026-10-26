@@ -1,5 +1,7 @@
 # Clean Code and maintainability audit
 
+> Historical audit of the pre-0.2.0 implementation. Its `@JsonValue` references describe that source snapshot; the alias was removed in 0.2.0 and is not a current compatibility requirement.
+
 ## Audit snapshot
 
 - Repository: `yjson_macros`

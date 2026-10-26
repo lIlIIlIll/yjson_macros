@@ -1,0 +1,31 @@
+{
+  "schema": "yjson.macro-doc-examples/1",
+  "profiles": {
+    "consumer": {
+      "imports": [
+        "std.collection.*",
+        "yjson.*",
+        "yjson_macros.*"
+      ],
+      "prelude": "prelude.cj"
+    }
+  },
+  "symbols": {
+    "yjson_macros.Json": {
+      "source": "../../src/json_literal.cj",
+      "profile": "consumer"
+    },
+    "yjson_macros.JsonCodec": {
+      "source": "../../src/json_codec.cj",
+      "profile": "consumer"
+    },
+    "yjson_macros.JsonUsing": {
+      "source": "../../src/json_codec.cj",
+      "profile": "consumer"
+    },
+    "yjson_macros.JsonSubtype": {
+      "source": "../../src/json_codec.cj",
+      "profile": "consumer"
+    }
+  }
+}

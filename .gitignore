@@ -1,2 +1,4 @@
 target/
 .cache/
+
+!tests/doc_examples/profile.json

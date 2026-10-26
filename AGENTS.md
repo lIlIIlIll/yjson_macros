@@ -3,12 +3,15 @@
 ## 项目契约
 
 - `yjson_macros` 是与 `yjson` 运行时分离编译的仓颉宏模块。先阅读 `README.md`、当前宏实现与 consumer 测试；不要把同仓库源码、版本或 SDK 依赖关系假定为已经发布。
-- `@JsonCodec` 生成代码依赖匹配的 `generated-support v1` 接口；`@Json` / `@JsonValue` 的静态字面量、`$()` 插值和动态键必须保留明确顺序与单次求值语义。
+- `@JsonCodec` 生成代码依赖匹配的 `generated-support v1` 接口；`@Json` 的静态字面量、`$()` 插值和动态键必须保留明确顺序与单次求值语义。
 - 不在本仓库凭空修改 sibling `yjson` 的实现；需要跨仓库协同的接口变更应分开提出并用明确版本/consumer 证据验证。
 
 ## 验证
 
-- 按当前 Cangjie SDK 编译生成宏和真实 consumer；运行 `python3 tests/run_characterization.py --runtime ../yjson`（本地存在匹配版本的相邻 runtime checkout 时），或按脚本帮助选择受支持的参数。脚本仅支持 `--runtime` 与 `--consumer-only`，**不支持按测试路径选择**；默认运行完整 runtime 和 consumer 测试，`--consumer-only` 会跳过 runtime 测试，不能宣称完整验证。
+- 按当前 Cangjie SDK 编译生成宏和真实 consumer；运行 `python3 tests/run_characterization.py --runtime ../yjson`（本地存在匹配版本的相邻 runtime checkout 时），或按脚本帮助选择受支持的参数。`--runtime` 为必需的显式源码选择，脚本不下载或使用隐式历史 SHA；**不支持按测试路径选择**。默认运行完整 runtime 和 consumer 测试、旧宏删除诊断与四个文档示例。`--consumer-only` 会跳过 runtime 测试，不能宣称完整验证。`--output-dir` 保留证据，`--runtime-sha256` 校验明确文件清单对应的源码身份，`--override-compile-option` 默认 `-O2`，只改隔离 manifest。
+- 当前最低 SDK 为 STS `1.2.0`，候选包版本为 `0.2.0`。保留 `ulimit -s 131072`；默认验证优化级别为 `-O2`。
+- 0.x 不承诺跨版本源码、ABI、生成代码或旧 SDK 兼容；保留当前协议 V1 的运行时检查。公开删除仍须单独确认。
+- `@JsonValue` 已在 0.2.0 删除，不得重新引入兼容别名；字面量调用使用 `@Json`。
 - 功能变更应覆盖 class/struct/enum、多态子类型、自定义 codec、重复动态键、插值顺序及非法语法，不把单一构建通过当作兼容性证明。
 
 ## Code Review 专项不变量
