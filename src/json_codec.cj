@@ -1385,6 +1385,7 @@ private func renderPolymorphicCodec(model: PolymorphicCodecModel): Tokens {
  * ```output
  * {"id":7,"name":"Ada"}
  * ```
+ * @group 10-application 应用 API
  */
 public macro JsonCodec(input: Tokens): Tokens {
     var decl = parseDecl(input)
@@ -1452,6 +1453,7 @@ public macro JsonCodec(input: Tokens): Tokens {
  * ```output
  * {"values":[1,2,3]}
  * ```
+ * @group 10-application 应用 API
  */
 public macro JsonUsing(attrs: Tokens, input: Tokens): Tokens {
     let expression = Token(TokenKind.STRING_LITERAL, attrs.toString().trimAscii())
@@ -1488,6 +1490,7 @@ public macro JsonUsing(attrs: Tokens, input: Tokens): Tokens {
  * ```output
  * {"kind":"dog","id":5,"bark":"woof"}
  * ```
+ * @group 10-application 应用 API
  */
 public macro JsonSubtype(attrs: Tokens, input: Tokens): Tokens {
     let expression = Token(TokenKind.STRING_LITERAL, attrs.toString().trimAscii())
