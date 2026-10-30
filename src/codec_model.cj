@@ -115,6 +115,7 @@ internal class PolymorphicCodecModel {
     let codecProviderName: String
     let discriminator: String
     let subtypes: ArrayList<PolymorphicSubtype>
+    let declaredSuperTypes: ArrayList<String>
 
     init(
         visibility: String,
@@ -127,7 +128,8 @@ internal class PolymorphicCodecModel {
         codecName: String,
         codecProviderName: String,
         discriminator: String,
-        subtypes: ArrayList<PolymorphicSubtype>
+        subtypes: ArrayList<PolymorphicSubtype>,
+        declaredSuperTypes: ArrayList<String>
     ) {
         this.visibility = visibility
         this.name = name
@@ -140,6 +142,7 @@ internal class PolymorphicCodecModel {
         this.codecProviderName = codecProviderName
         this.discriminator = discriminator
         this.subtypes = subtypes
+        this.declaredSuperTypes = declaredSuperTypes
     }
 }
 
@@ -153,7 +156,7 @@ internal class ObjectCodecModel {
     let targetType: String
     let constraints: String
     let codecName: String
-    let inheritedObjectType: String
+    let declaredSuperTypes: ArrayList<String>
     let isClass: Bool
     let staticCompact: Bool
     let readPlans = ArrayList<FieldReadPlan>()
@@ -170,7 +173,7 @@ internal class ObjectCodecModel {
         targetType: String,
         constraints: String,
         codecName: String,
-        inheritedObjectType: String,
+        declaredSuperTypes: ArrayList<String>,
         isClass: Bool,
         staticCompact: Bool
     ) {
@@ -183,7 +186,7 @@ internal class ObjectCodecModel {
         this.targetType = targetType
         this.constraints = constraints
         this.codecName = codecName
-        this.inheritedObjectType = inheritedObjectType
+        this.declaredSuperTypes = declaredSuperTypes
         this.isClass = isClass
         this.staticCompact = staticCompact
         for (field in fields) {

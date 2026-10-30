@@ -227,16 +227,6 @@ internal func renderCompactDirectCodecField(
     renderCompactCodecField(plan, value, first, "writer", cursor)
 }
 
-internal func renderCompactDirectConcreteField(
-    plan: FieldWritePlan,
-    value: String,
-    first: String,
-    concreteType: String
-): String {
-    compactContainerEntryPrefix(plan, first, "writer") +
-        "__yJsonConcrete_${concreteType}.writeCompactRawWithWriter(${value}, writer)"
-}
-
 private func renderPrimitiveCompactContainerField(
     plan: FieldWritePlan,
     value: String,

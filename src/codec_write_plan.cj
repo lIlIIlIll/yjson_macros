@@ -145,10 +145,6 @@ internal class FieldWritePlan {
         }
     }
 
-    func needsCachedDirectCursor(): Bool {
-        !hasCompactOp() && (!field.codecExpr.isEmpty() || field.isOption)
-    }
-
     func supportsScalarBatch(): Bool {
         match (compactOp) {
             case CompactWriteOp.BoolValue |
