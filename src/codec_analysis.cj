@@ -299,6 +299,21 @@ internal func constructorParams(body: Body): ArrayList<CodecConstructorParam> {
     result
 }
 
+// Declared supertype spellings, in source order. std.ast does not identify the
+// class versus interface role of each entry, so generated code must not assume
+// the first entry is a class.
+internal func declaredSuperTypeSpellings(decl: Decl): ArrayList<String> {
+    let result = ArrayList<String>()
+    match (decl) {
+        case classDecl: ClassDecl =>
+            for (superType in classDecl.superTypes) {
+                result.add(superType.toTokens().toString().trimAscii())
+            }
+        case _ => ()
+    }
+    result
+}
+
 internal func genericNames(decl: Decl): ArrayList<String> {
     let result = ArrayList<String>()
     try {
@@ -352,6 +367,7 @@ internal func analyzePolymorphicCodec(
         }
     }
 
+    let declaredSuperTypes = declaredSuperTypeSpellings(decl)
     PolymorphicCodecModel(
         visibility,
         name,
@@ -363,6 +379,7 @@ internal func analyzePolymorphicCodec(
         codecName,
         "${name}Json",
         discriminator,
-        subtypes
+        subtypes,
+        declaredSuperTypes
     )
 }

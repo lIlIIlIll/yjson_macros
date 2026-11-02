@@ -78,12 +78,14 @@ private func cursorFastReadTemplate(field: CodecField, directFastTemplate: Strin
         case _ => ""
     }
     if (!primitiveRead.isEmpty()) { return primitiveRead }
+    // Maps must go through duplicate-key policy-aware codecs. The raw cursor
+    // map helpers are documented as overwrite-only (LastWins semantics), so
+    // using them here would make the default Reject policy accept duplicate
+    // keys. Falling through to the direct template/cached codec keeps the
+    // rejecting behavior; arrays cannot carry duplicate names.
     match (field.capabilities.typeShape.normalized) {
         case "Array<Int64>" => "__reader.readRawInt64Array()"
         case "Array<String>" => "__reader.readRawStringArray()"
-        case "HashMap<String,Int64>" => "__reader.readRawInt64Map()"
-        case "HashMap<String,String>" => "__reader.readRawStringMap()"
-        case "HashMap<String,Array<Int64>>" => "__reader.readRawInt64ArrayMap()"
         case "Option<Int64>" =>
             "if (__reader.tryReadRawNull()) { None<Int64> } else { Some(__reader.readRawInt64()) }"
         case "Option<String>" =>

@@ -1,7 +1,5 @@
 macro package yjson_macros
 
-import std.collection.*
-
 internal enum PrimitiveFieldKind {
     Other |
     BoolValue |
@@ -15,7 +13,6 @@ internal class FieldTypeShape {
     let sourceText: String
     let normalized: String
     let primitive: PrimitiveFieldKind
-    let generatedBuiltin: Bool
 
     init(sourceText: String) {
         this.sourceText = sourceText
@@ -39,14 +36,6 @@ internal class FieldTypeShape {
             case "Decimal" => PrimitiveFieldKind.DecimalValue
             case _ => PrimitiveFieldKind.Other
         }
-        generatedBuiltin = match (normalized) {
-            case "Bool" | "Int8" | "Int16" | "Int32" | "Int64" |
-                 "UInt8" | "UInt16" | "UInt32" | "UInt64" |
-                 "Float16" | "Float32" | "Float64" | "Rune" | "String" |
-                 "BigInt" | "Decimal" | "DateTime" | "Duration" |
-                 "JsonNode" | "JsonValueView" => true
-            case _ => false
-        }
     }
 }
 
@@ -59,19 +48,6 @@ internal class FieldCapabilities {
         typeShape = FieldTypeShape(typeText)
         this.usesCustomCodec = usesCustomCodec
         this.isOption = isOption
-    }
-
-    func generatedConcreteType(genericNames: ArrayList<String>): String {
-        if (isOption || usesCustomCodec || typeShape.generatedBuiltin) { return "" }
-        let normalized = typeShape.normalized
-        for (genericName in genericNames) {
-            if (normalized == genericName) { return "" }
-        }
-        if (normalized.contains("<") || normalized.contains(">") ||
-            normalized.contains(".")) {
-            return ""
-        }
-        normalized
     }
 
     func scalarScratchInitializer(): Option<String> {

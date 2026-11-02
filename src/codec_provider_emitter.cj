@@ -11,19 +11,21 @@ internal func appendObjectProviders(sb: StringBuilder, model: ObjectCodecModel):
     let targetType = model.targetType
     let constraints = model.constraints
     let codecName = model.codecName
-    let inheritedObjectType = model.inheritedObjectType
+    let declaredSuperTypes = model.declaredSuperTypes
+    let isClass = model.isClass
     let staticCompact = model.staticCompact
     let visibility = if (hasModifier(decl, TokenKind.PUBLIC)) { "public " } else { "" }
     let canProvideCodec = !hasModifier(decl, TokenKind.OPEN) &&
         !hasModifier(decl, TokenKind.ABSTRACT)
-    let canProvideCompact = staticCompact && inheritedObjectType.isEmpty()
-    let exposedCodecType = if (staticCompact && inheritedObjectType.isEmpty()) {
+    let hasSuperType = !declaredSuperTypes.isEmpty()
+    let canProvideCompact = staticCompact && !hasSuperType
+    let exposedCodecType = if (staticCompact && !hasSuperType) {
         "GeneratedCompactCursorWriteCodecV1<${targetType}>"
     } else {
         "JsonCodec<${targetType}>"
     }
     let completeCodecName = "__YJsonCompleteCodec_${name}"
-    if (canProvideCodec && !inheritedObjectType.isEmpty()) {
+    if (canProvideCodec && hasSuperType) {
         appendLine(sb, 0, "private class ${completeCodecName}${genericText} <: JsonCodec<${targetType}>${constraints} {")
         appendLine(sb, 1, "private let own: GeneratedObjectCodecV1<${targetType}>")
         appendLine(sb, 1, "init(own: GeneratedObjectCodecV1<${targetType}>) { this.own = own }")
@@ -32,17 +34,28 @@ internal func appendObjectProviders(sb: StringBuilder, model: ObjectCodecModel):
         appendLine(sb, 2, "context.enterObject(value)")
         appendLine(sb, 2, "try {")
         appendLine(sb, 3, "writer.startObject()")
-        appendLine(sb, 3, "generatedObjectCodecV1Of<${inheritedObjectType}>().writeObjectFields(value, writer)")
+        // std.ast exposes only supertype spellings, so composition goes through
+        // the typed inherited-field protocol: interface supertypes write
+        // nothing, a real base class writes its own ancestor chain, and an
+        // unannotated base class is rejected instead of losing fields.
+        for (superType in declaredSuperTypes) {
+            appendLine(sb, 3, "GeneratedSupportV1.writeInheritedObjectFields<${superType}>(value, writer)")
+        }
         appendLine(sb, 3, "own.writeObjectFields(value, writer)")
         appendLine(sb, 3, "writer.endObject()")
         appendLine(sb, 2, "} finally { context.leaveObject() }")
         appendLine(sb, 1, "}")
-        appendLine(sb, 1, "public func read(reader: JsonReader): ${targetType} { own.read(reader) }")
+        appendLine(sb, 1, "public func read(reader: JsonReader): ${targetType} {")
+        for (superType in declaredSuperTypes) {
+            appendLine(sb, 2, "GeneratedSupportV1.requireInheritedObjectFields<${superType}>()")
+        }
+        appendLine(sb, 2, "own.read(reader)")
+        appendLine(sb, 1, "}")
         appendLine(sb, 0, "}")
     }
     if (generics.isEmpty()) {
         appendLine(sb, 0, "private let __yJsonConcrete_${name} = ${codecName}()")
-        if (canProvideCodec && !inheritedObjectType.isEmpty()) {
+        if (canProvideCodec && hasSuperType) {
             appendLine(sb, 0, "${visibility}let ${name}Json: JsonCodec<${name}> = ${completeCodecName}(__yJsonConcrete_${name})")
         } else {
             appendLine(sb, 0, "${visibility}let ${name}Json: ${exposedCodecType} = __yJsonConcrete_${name}")
@@ -64,7 +77,7 @@ internal func appendObjectProviders(sb: StringBuilder, model: ObjectCodecModel):
                 appendLine(sb, 2, "GeneratedSupportV1.enterGeneratedEntry()")
                 appendLine(sb, 2, "let writer = YJson.acquireGeneratedCompactStringWriter(options)")
                 appendLine(sb, 2, "try {")
-                appendLine(sb, 3, "if (writer.tryBeginGeneratedCompactRawValue()) {")
+                appendLine(sb, 3, "if (__yJsonConcrete_${name}.supportsCompactRaw() && writer.tryBeginGeneratedCompactRawValue()) {")
                 appendLine(sb, 4, "__yJsonConcrete_${name}.writeCompactRawWithWriter(value, writer)")
                 appendLine(sb, 4, "return writer.finishGeneratedCompactString()")
                 appendLine(sb, 3, "}")
@@ -75,7 +88,7 @@ internal func appendObjectProviders(sb: StringBuilder, model: ObjectCodecModel):
                 appendLine(sb, 1, "public static func fromJson(text: String, codec!: GeneratedCompactCursorWriteCodecV1<${name}>, options!: JsonReadOptions = JsonReadOptions.defaults): ${name} {")
                 appendLine(sb, 2, "GeneratedSupportV1.enterGeneratedEntry()")
                 appendLine(sb, 2, "if (GeneratedSupportV1.usesDefaultFastReadOptions(options)) {")
-                appendLine(sb, 3, "let reader = JsonFastReader(text)")
+                appendLine(sb, 3, "let reader = GeneratedSupportV1.newValidatedFastReader(text)")
                 appendLine(sb, 3, "let result = __yJsonConcrete_${name}.readFast(reader)")
                 appendLine(sb, 3, "reader.expectEnd()")
                 appendLine(sb, 3, "return result")
@@ -92,10 +105,14 @@ internal func appendObjectProviders(sb: StringBuilder, model: ObjectCodecModel):
             appendLine(sb, 1, "public static func generatedObjectCodecV1(_: GeneratedCodecTokenV1<${name}>): GeneratedObjectCodecV1<${name}> { GeneratedSupportV1.requireProtocolVersion(1); __yJsonConcrete_${name} }")
             appendLine(sb, 0, "}")
         }
+        if (isClass) {
+            appendInheritedFieldsProvider(
+                sb, declaredSuperTypes, targetType, genericText, constraints)
+        }
         return
     }
 
-    if (canProvideCodec && !inheritedObjectType.isEmpty()) {
+    if (canProvideCodec && hasSuperType) {
         appendLine(sb, 0, "${visibility}func ${name}Json${genericText}(): JsonCodec<${targetType}>${constraints} { let own = ${codecName}${genericText}(); ${completeCodecName}${genericText}(own) }")
     } else {
         appendLine(sb, 0, "${visibility}func ${name}Json${genericText}(): ${exposedCodecType}${constraints} { ${codecName}${genericText}() }")
@@ -116,4 +133,33 @@ internal func appendObjectProviders(sb: StringBuilder, model: ObjectCodecModel):
         appendLine(sb, 1, "public static func generatedObjectCodecV1(_: GeneratedCodecTokenV1<${targetType}>): GeneratedObjectCodecV1<${targetType}> { GeneratedSupportV1.requireProtocolVersion(1); ${codecName}${genericText}() }")
         appendLine(sb, 0, "}")
     }
+    if (isClass) {
+        appendInheritedFieldsProvider(
+            sb, declaredSuperTypes, targetType, genericText, constraints)
+    }
+}
+
+// Emits the inherited-field protocol for one generated class.
+//
+// std.ast exposes only supertype spellings, so this conformance is the only
+// way to tell a real base class from an interface at runtime: each declared
+// supertype is resolved through its own typed token, interfaces write nothing,
+// and a real base class contributes its complete ancestor chain exactly once.
+// Registering this conformance for every generated class also makes it
+// transitively available to subclasses declared in other source files.
+internal func appendInheritedFieldsProvider(
+    sb: StringBuilder,
+    declaredSuperTypes: ArrayList<String>,
+    targetType: String,
+    genericText: String,
+    constraints: String
+): Unit {
+    appendLine(sb, 0, "extend${genericText} ${targetType} <: GeneratedInheritedObjectFieldsV1<${targetType}>${constraints} {")
+    appendLine(sb, 1, "public func writeInheritedObjectFieldsV1(_: GeneratedCodecTokenV1<${targetType}>, writer: JsonWriter): Unit {")
+    for (superType in declaredSuperTypes) {
+        appendLine(sb, 2, "GeneratedSupportV1.writeInheritedObjectFields<${superType}>(this, writer)")
+    }
+    appendLine(sb, 2, "generatedObjectCodecV1Of<${targetType}>().writeObjectFields(this, writer)")
+    appendLine(sb, 1, "}")
+    appendLine(sb, 0, "}")
 }

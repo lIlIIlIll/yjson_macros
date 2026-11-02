@@ -64,24 +64,25 @@ private func renderedEnumConstraints(decl: EnumDecl, generics: ArrayList<String>
     " where " + joinStrings(parts, ", ")
 }
 
-private func defaultFieldCodec(typeText: String): String {
+// The Boolean records whether the initializer resolves another generated provider.
+private func defaultFieldCodec(typeText: String): (String, Bool) {
     match (typeText) {
-        case "Bool" => return "JsonCodecs.bool"
-        case "Int64" => return "JsonCodecs.int64"
-        case "Int32" => return "JsonCodecs.int32"
-        case "Int16" => return "JsonCodecs.int16"
-        case "Int8" => return "JsonCodecs.int8"
-        case "UInt64" => return "JsonCodecs.uint64"
-        case "UInt32" => return "JsonCodecs.uint32"
-        case "UInt16" => return "JsonCodecs.uint16"
-        case "UInt8" => return "JsonCodecs.uint8"
-        case "Float64" => return "JsonCodecs.float64"
-        case "Float32" => return "JsonCodecs.float32"
-        case "Float16" => return "JsonCodecs.float16"
-        case "String" => return "JsonCodecs.string"
-        case "BigInt" => return "JsonCodecs.bigInt"
-        case "Decimal" => return "JsonCodecs.decimal"
-        case "Rune" => return "JsonCodecs.rune"
+        case "Bool" => return ("JsonCodecs.bool", false)
+        case "Int64" => return ("JsonCodecs.int64", false)
+        case "Int32" => return ("JsonCodecs.int32", false)
+        case "Int16" => return ("JsonCodecs.int16", false)
+        case "Int8" => return ("JsonCodecs.int8", false)
+        case "UInt64" => return ("JsonCodecs.uint64", false)
+        case "UInt32" => return ("JsonCodecs.uint32", false)
+        case "UInt16" => return ("JsonCodecs.uint16", false)
+        case "UInt8" => return ("JsonCodecs.uint8", false)
+        case "Float64" => return ("JsonCodecs.float64", false)
+        case "Float32" => return ("JsonCodecs.float32", false)
+        case "Float16" => return ("JsonCodecs.float16", false)
+        case "String" => return ("JsonCodecs.string", false)
+        case "BigInt" => return ("JsonCodecs.bigInt", false)
+        case "Decimal" => return ("JsonCodecs.decimal", false)
+        case "Rune" => return ("JsonCodecs.rune", false)
         case _ => ()
     }
 
@@ -91,21 +92,25 @@ private func defaultFieldCodec(typeText: String): String {
                 let arguments = q.typeArguments
                 if (q.identifier.value == "Option" && arguments.size == 1) {
                     let inner = arguments[0].toTokens().toString().trimAscii()
-                    return "JsonCodecs.option(" + defaultFieldCodec(inner) + ")"
+                    let (codec, deferred) = defaultFieldCodec(inner)
+                    return ("JsonCodecs.option(" + codec + ")", deferred)
                 }
                 if (q.identifier.value == "Array" && arguments.size == 1) {
                     let inner = arguments[0].toTokens().toString().trimAscii()
-                    return "JsonCodecs.array(" + defaultFieldCodec(inner) + ")"
+                    let (codec, deferred) = defaultFieldCodec(inner)
+                    return ("JsonCodecs.array(" + codec + ")", deferred)
                 }
                 if (q.identifier.value == "ArrayList" && arguments.size == 1) {
                     let inner = arguments[0].toTokens().toString().trimAscii()
-                    return "JsonCodecs.arrayList(" + defaultFieldCodec(inner) + ")"
+                    let (codec, deferred) = defaultFieldCodec(inner)
+                    return ("JsonCodecs.arrayList(" + codec + ")", deferred)
                 }
                 if (q.identifier.value == "HashMap" && arguments.size == 2) {
                     let key = arguments[0].toTokens().toString().trimAscii()
                     if (key == "String") {
                         let value = arguments[1].toTokens().toString().trimAscii()
-                        return "JsonCodecs.stringMap(" + defaultFieldCodec(value) + ")"
+                        let (codec, deferred) = defaultFieldCodec(value)
+                        return ("JsonCodecs.stringMap(" + codec + ")", deferred)
                     }
                 }
             case p: ParenType =>
@@ -115,7 +120,7 @@ private func defaultFieldCodec(typeText: String): String {
     } catch (_) {
         // Keep provider-based fallback for user-defined and future types.
     }
-    "generatedCodecV1Of<${typeText}>()"
+    ("generatedCodecV1Of<${typeText}>()", true)
 }
 
 private func cachedFieldCodecName(field: CodecField): String {
@@ -131,24 +136,56 @@ private func cachedCursorFastFieldCodecName(field: CodecField): String {
 }
 
 
-// A non-generic user model emitted by @JsonCodec owns a private concrete
-// codec global with the same source-level name.  Keep this deliberately
-// narrow: container/builtin/custom-codec fields must continue through their
-// cached protocol codec because no generated concrete global is guaranteed
-// for them.
-private func simpleGeneratedTypeName(
-    field: CodecField,
-    genericNames: ArrayList<String>
-): String {
-    field.capabilities.generatedConcreteType(genericNames)
-}
-
 private func fieldCodec(field: CodecField): String {
     cachedFieldCodecName(field)
 }
 
-private func fieldCodecInitializer(field: CodecField): String {
-    if (field.codecExpr.isEmpty()) { defaultFieldCodec(field.typeText) } else { "(${field.codecExpr})" }
+private func fieldCodecInitializer(field: CodecField): (String, Bool) {
+    if (field.codecExpr.isEmpty()) { defaultFieldCodec(field.typeText) } else { ("(${field.codecExpr})", false) }
+}
+
+private func appendFieldCodecBinding(
+    sb: StringBuilder,
+    deferred: ArrayList<(String, String, String)>,
+    name: String,
+    typeText: String,
+    initializer: String,
+    deferInitialization: Bool
+): Unit {
+    if (deferInitialization) {
+        deferred.add((name, typeText, initializer))
+    } else {
+        appendLine(sb, 1, "private let ${name}: ${typeText} = ${initializer}")
+    }
+}
+
+private func appendDeferredFieldCodecs(
+    sb: StringBuilder,
+    members: StringBuilder,
+    deferred: ArrayList<(String, String, String)>,
+    codecName: String,
+    genericText: String,
+    constraints: String
+): Unit {
+    if (deferred.isEmpty()) { return }
+    let stateName = "${codecName}Fields"
+    appendLine(sb, 0, "private class ${stateName}${genericText}${constraints} {")
+    for ((name, typeText, initializer) in deferred) {
+        appendLine(sb, 1, "public let ${name}: ${typeText} = ${initializer}")
+    }
+    appendLine(sb, 0, "}")
+    // Keep the state concrete; the nongeneric gate only publishes initialization.
+    appendLine(members, 1, "private var __yJsonFields: Option<${stateName}${genericText}> = None")
+    appendLine(members, 1, "private let __yJsonFieldInitialization = GeneratedCodecInitializationV1()")
+    appendLine(members, 1, "private func __yJsonResolveFields(): ${stateName}${genericText} {")
+    appendLine(members, 2, "if (!__yJsonFieldInitialization.isInitialized()) {")
+    appendLine(members, 3, "__yJsonFieldInitialization.initialize({ => __yJsonFields = Some(${stateName}${genericText}()) })")
+    appendLine(members, 2, "}")
+    appendLine(members, 2, "__yJsonFields.getOrThrow()")
+    appendLine(members, 1, "}")
+    for ((name, typeText, _) in deferred) {
+        appendLine(members, 1, "private prop ${name}: ${typeText} { get() { __yJsonResolveFields().${name} } }")
+    }
 }
 
 private func directScalarWrite(field: CodecField, value: String): String {
@@ -211,8 +248,7 @@ private func compactRawFieldWrite(field: CodecField, value: String, first: Strin
 private func compactRawConcreteFieldWrite(
     field: CodecField,
     value: String,
-    first: String,
-    genericNames: ArrayList<String>
+    first: String
 ): String {
     let plan = FieldWritePlan(field)
     let scalar = renderCompactDirectScalarField(plan, value, first, false)
@@ -223,15 +259,11 @@ private func compactRawConcreteFieldWrite(
     if (!container.isEmpty()) {
         return container
     }
-    if (!field.codecExpr.isEmpty() || field.isOption) {
-        return renderCompactDirectCodecField(plan, value, first, "__writer")
-    }
-    let concreteType = simpleGeneratedTypeName(field, genericNames)
-    if (!concreteType.isEmpty()) {
-        return renderCompactDirectConcreteField(plan, value, first, concreteType)
-    }
-    renderCompactDirectCodecField(
-        plan, value, first, "GeneratedSupportV1.writeCursor(writer)")
+    // Every remaining shape writes through the cached protocol codec. The
+    // generated concrete codec global is file-private, so nested models
+    // declared in another source file must not be referenced by name. The
+    // caller keeps one write cursor for the whole object and passes it here.
+    renderCompactDirectCodecField(plan, value, first, "__writer")
 }
 
 private func supportsStaticCompactRawWrite(fields: ArrayList<CodecField>): Bool {
@@ -245,12 +277,10 @@ private func supportsStaticCompactRawWrite(fields: ArrayList<CodecField>): Bool 
     true
 }
 
-private func compactRawFieldNeedsContext(
-    field: CodecField,
-    genericNames: ArrayList<String>
-): Bool {
-    !field.codecExpr.isEmpty() || field.isOption ||
-        !simpleGeneratedTypeName(field, genericNames).isEmpty()
+private func compactRawFieldNeedsContext(field: CodecField): Bool {
+    // Option and custom-codec fields keep their field path so nested failures
+    // stay located; every other non-container shape writes its own entry.
+    !field.codecExpr.isEmpty() || field.isOption || !FieldWritePlan(field).hasCompactOp()
 }
 
 
@@ -276,10 +306,24 @@ private func generatedBufferReserveTerm(field: CodecField, value: String): Strin
 // String values remain the only runtime terms for the common literal-name
 // shape; non-literal names retain the general exact expression below.
 private func generatedBufferReserveHint(fields: ArrayList<CodecField>, valuePrefix: String): String {
+    generatedBufferReserveHintFrom(fields, 0, valuePrefix)
+}
+
+// Same bound for the fields starting at `start`. Used to re-establish the
+// exact remaining budget after a field whose runtime output can exceed its
+// static bound, so following unchecked batched writes stay capacity safe.
+private func generatedBufferReserveHintFrom(
+    fields: ArrayList<CodecField>,
+    start: Int64,
+    valuePrefix: String
+): String {
     var fixedReserve: Int64 = 2
     let dynamicTerms = ArrayList<String>()
     var canFold = true
-    for (field in fields) {
+    var index = start
+    while (index < fields.size) {
+        let field = fields[index]
+        index++
         if (!field.writeField) { continue }
         if (!field.codecExpr.isEmpty() || field.isOption ||
             field.jsonNameExpr != "\"${field.name}\"") {
@@ -305,12 +349,21 @@ private func generatedBufferReserveHint(fields: ArrayList<CodecField>, valuePref
         return "${fixedReserve} + " + joinStrings(dynamicTerms, " + ")
     }
     let terms = ArrayList<String>()
-    for (field in fields) {
-        let term = generatedBufferReserveTerm(field, "${valuePrefix}.${field.name}")
+    index = start
+    while (index < fields.size) {
+        let term = generatedBufferReserveTerm(fields[index], "${valuePrefix}.${fields[index].name}")
         if (!term.isEmpty()) { terms.add(term) }
+        index++
     }
     if (terms.isEmpty()) { return "" }
     "2 + " + joinStrings(terms, " + ")
+}
+
+private func isStringField(field: CodecField): Bool {
+    match (field.capabilities.typeShape.primitive) {
+        case PrimitiveFieldKind.StringValue => true
+        case _ => false
+    }
 }
 
 private func generatedBufferAllScalar(fields: ArrayList<CodecField>): Bool {
@@ -428,8 +481,7 @@ private func appendDirectFastFieldAssignment(
 // the generic name dispatcher for reordered/unknown input.
 private func canUseMutableObjectFastRead(
     readPlans: ArrayList<FieldReadPlan>,
-    params: ArrayList<CodecConstructorParam>,
-    genericNames: ArrayList<String>
+    params: ArrayList<CodecConstructorParam>
 ): Bool {
     if (!params.isEmpty()) { return false }
     var hasField = false
@@ -438,10 +490,6 @@ private func canUseMutableObjectFastRead(
         if (!field.writeField) { continue }
         hasField = true
         if (!field.mutable || field.isOption || !field.codecExpr.isEmpty()) {
-            return false
-        }
-        if (plan.needsCursorFastCodec &&
-            simpleGeneratedTypeName(field, genericNames).isEmpty()) {
             return false
         }
     }
@@ -453,14 +501,18 @@ private func appendMutableObjectFastFieldAssignment(
     level: Int64,
     plan: FieldReadPlan,
     label: String,
-    checkDuplicate: Bool,
-    genericNames: ArrayList<String>
+    checkDuplicate: Bool
 ): Unit {
     let field = plan.field
+    // Nested generated models may be declared in another source file, where
+    // the private concrete codec global is not visible. Use the typed cached
+    // codec seam instead: it resolves the same generated cursor codec through
+    // the public provider protocol, so same-file and split-file models behave
+    // identically.
     let directRead = plan.cursorFastRead()
-    let concreteType = simpleGeneratedTypeName(field, genericNames)
-    let readValue = if (!concreteType.isEmpty()) {
-        "__yJsonConcrete_${concreteType}.readFastWithCursor(reader, __reader)"
+    let readValue = if (directRead.isEmpty()) {
+        "GeneratedSupportV1.readWithCursorCached(${cachedCursorFastFieldCodecName(field)}, " +
+            "${cachedFastFieldCodecName(field)}, ${fieldCodec(field)}, reader, __reader)"
     } else {
         directRead
     }
@@ -484,7 +536,6 @@ private func appendMutableObjectFastRead(
     let readPlans = model.readPlans
     let params = model.constructorParams
     let targetType = model.targetType
-    let genericNames = model.genericNames
     let fastReadContext = cursorFastReadNeedsContext(readPlans)
     appendLine(sb, 2, "let __fastReader = __reader.generatedReaderV1()")
     appendLine(sb, 2, "let context = GeneratedSupportV1.readState(reader)")
@@ -516,7 +567,7 @@ private func appendMutableObjectFastRead(
             if (field.writeField) {
                 appendLine(sb, 4, "if (!__reader.tryReadRawCompactNameTokenBytes(__first, __yJsonFastFieldNames[${canonicalLabelIndex}])) { break }")
                 appendMutableObjectFastFieldAssignment(
-                    sb, 4, plan, field.jsonNameExpr, false, genericNames)
+                    sb, 4, plan, field.jsonNameExpr, false)
                 appendLine(sb, 4, "__first = false")
             }
             canonicalLabelIndex += 1 + field.aliases.size
@@ -542,12 +593,12 @@ private func appendMutableObjectFastRead(
         if (!field.writeField) { continue }
         appendLine(sb, 5, "case ${labelIndex} =>")
         appendMutableObjectFastFieldAssignment(
-            sb, 6, plan, field.jsonNameExpr, true, genericNames)
+            sb, 6, plan, field.jsonNameExpr, true)
         labelIndex += 1
         for (alias in field.aliases) {
             appendLine(sb, 5, "case ${labelIndex} =>")
             appendMutableObjectFastFieldAssignment(
-                sb, 6, plan, alias, true, genericNames)
+                sb, 6, plan, alias, true)
             labelIndex += 1
         }
     }
@@ -621,7 +672,7 @@ private func appendDirectFastObjectRead(
         appendLine(sb, 5, "case ${labelIndex} =>")
         appendDirectFastFieldAssignment(sb, 6, plan, label, true, fastReaderName)
     }
-    appendLine(sb, 5, "case _ => reader.skipRawWithDepth(context.remainingDepth())")
+    appendLine(sb, 5, "case _ => reader.skipValue(context.remainingDepth())")
     appendLine(sb, 4, "}")
     appendLine(sb, 4, "__first = false")
     appendLine(sb, 3, "}")
@@ -641,7 +692,6 @@ private func appendObjectReadMethods(sb: StringBuilder, model: ObjectCodecModel)
     let params = model.constructorParams
     let targetType = model.targetType
     let fastLabels = model.fastLabels
-    let generics = model.genericNames
     appendLine(sb, 1, "public func read(reader: JsonReader): ${targetType} {")
     appendLine(sb, 2, "let context = GeneratedSupportV1.readState(reader)")
     appendLine(sb, 2, "context.enterValue()")
@@ -687,7 +737,7 @@ private func appendObjectReadMethods(sb: StringBuilder, model: ObjectCodecModel)
     appendLine(sb, 1, "}")
 
     let fastReadContext = cursorFastReadNeedsContext(readPlans)
-    let mutableObjectFastRead = canUseMutableObjectFastRead(readPlans, params, generics)
+    let mutableObjectFastRead = canUseMutableObjectFastRead(readPlans, params)
     appendLine(sb, 1, "public func readFast(reader: GeneratedSupportV1Reader): ${targetType} {")
     appendLine(sb, 2, "readFastWithCursor(reader, GeneratedSupportV1.readCursor(reader))")
     appendLine(sb, 1, "}")
@@ -785,12 +835,15 @@ private func analyzeObjectCodec(decl: Decl, body: Body, isClass: Bool): ObjectCo
     let name = decl.identifier.value
     let fields = collectFields(body)
     let params = constructorParams(body)
-    var inheritedObjectType = ""
+    // std.ast only exposes the supertype spellings, never which one is the
+    // class and which are interfaces. Keep every declared supertype so the
+    // generated inherited-field protocol can cover a class followed by
+    // interfaces without assuming position 0 is the class.
+    let declaredSuperTypes = declaredSuperTypeSpellings(decl)
     if (isClass) {
         match (decl) {
             case classDecl: ClassDecl =>
                 if (!classDecl.superTypes.isEmpty()) {
-                    inheritedObjectType = classDecl.superTypes[0].toTokens().toString().trimAscii()
                     for (param in params) {
                         if (fieldByName(fields, param.name).isSome()) { continue }
                         let inner = optionInner(parseType(cangjieLex(param.typeText)))
@@ -822,10 +875,10 @@ private func analyzeObjectCodec(decl: Decl, body: Body, isClass: Bool): ObjectCo
     let constraints = renderedConstraints(decl, fields, generics)
     let codecName = "__YJsonCodec_${name}"
     ObjectCodecModel(decl, name, fields, params, generics, genericText, targetType,
-        constraints, codecName, inheritedObjectType, isClass, supportsStaticCompactRawWrite(fields))
+        constraints, codecName, declaredSuperTypes, isClass, supportsStaticCompactRawWrite(fields))
 }
 
-private func appendObjectCodecPrelude(sb: StringBuilder, model: ObjectCodecModel): Unit {
+private func appendObjectCodecPrelude(sb: StringBuilder, model: ObjectCodecModel): Bool {
     let targetType = model.targetType
     let codecName = model.codecName
     let genericText = model.genericText
@@ -834,7 +887,7 @@ private func appendObjectCodecPrelude(sb: StringBuilder, model: ObjectCodecModel
     let fastLabelBytes = model.fastLabelBytes
     let directInterface = if (staticCompact) {
         "GeneratedCompactCursorWriteCodecV1<${targetType}> & " +
-            "GeneratedCompactArrayListElementCodecV1<${targetType}>"
+            "GeneratedCompactArrayListElementCodecV1<${targetType}> & GeneratedStableCompactWriteCodecV1"
     } else {
         "GeneratedDirectWriteCodecV1<${targetType}> & " +
             "GeneratedCursorWriteCodecV1<${targetType}>"
@@ -843,30 +896,51 @@ private func appendObjectCodecPrelude(sb: StringBuilder, model: ObjectCodecModel
         "GeneratedCodecV1<${targetType}> & GeneratedDirectFastReadCodecV1<${targetType}> & " +
         "GeneratedCursorReadCodecV1<${targetType}> & " +
         directInterface
-    appendLine(sb, 0, "private class ${codecName}${genericText} <: ${codecInterfaces}${constraints} {")
+    let members = StringBuilder()
+    let deferred = ArrayList<(String, String, String)>()
+    var hasGeneratedWriteDependency = false
     for (plan in model.readPlans) {
         let field = plan.field
         let fullyDirect = !directScalarWrite(field, "__value").isEmpty() &&
             plan.hasDirectSemanticRead() && plan.hasDirectFastRead()
         if (!fullyDirect) {
-            appendLine(sb, 1, "private let ${cachedFieldCodecName(field)}: JsonCodec<${field.typeText}> = ${fieldCodecInitializer(field)}")
+            let (initializer, deferInitialization) = fieldCodecInitializer(field)
+            if (deferInitialization && field.writeField) { hasGeneratedWriteDependency = true }
+            appendFieldCodecBinding(members, deferred, cachedFieldCodecName(field), "JsonCodec<${field.typeText}>",
+                initializer, deferInitialization)
             let needsDirectFastCodec = plan.needsDirectFastCodec
             let needsCursorFastCodec = plan.needsCursorFastCodec
             if (needsDirectFastCodec || needsCursorFastCodec) {
-                appendLine(sb, 1, "private let ${cachedFastFieldCodecName(field)}: Option<GeneratedCodecV1<${field.typeText}>> = match (${cachedFieldCodecName(field)}) { case __fast: GeneratedCodecV1<${field.typeText}> => Some(__fast); case _ => None<GeneratedCodecV1<${field.typeText}>> }")
+                appendFieldCodecBinding(members, deferred, cachedFastFieldCodecName(field),
+                    "Option<GeneratedCodecV1<${field.typeText}>>",
+                    "match (${cachedFieldCodecName(field)}) { case __fast: GeneratedCodecV1<${field.typeText}> => Some(__fast); case _ => None<GeneratedCodecV1<${field.typeText}>> }",
+                    deferInitialization)
             }
             if (needsCursorFastCodec) {
-                appendLine(sb, 1, "private let ${cachedCursorFastFieldCodecName(field)}: Option<GeneratedCursorReadCodecV1<${field.typeText}>> = match (${cachedFieldCodecName(field)}) { case __fast: GeneratedCursorReadCodecV1<${field.typeText}> => Some(__fast); case _ => None<GeneratedCursorReadCodecV1<${field.typeText}>> }")
+                appendFieldCodecBinding(members, deferred, cachedCursorFastFieldCodecName(field),
+                    "Option<GeneratedCursorReadCodecV1<${field.typeText}>>",
+                    "match (${cachedFieldCodecName(field)}) { case __fast: GeneratedCursorReadCodecV1<${field.typeText}> => Some(__fast); case _ => None<GeneratedCursorReadCodecV1<${field.typeText}>> }",
+                    deferInitialization)
             }
             if (compactRawSpecializedFieldWrite(field, "__value", "__first").isEmpty() &&
                 directScalarWrite(field, "__value").isEmpty()) {
-                appendLine(sb, 1, "private let ${compactRawCodecName(field)}: Option<GeneratedCompactWriteCodecV1<${field.typeText}>> = match (${cachedFieldCodecName(field)}) { case __raw: GeneratedCompactWriteCodecV1<${field.typeText}> => Some(__raw); case _ => None<GeneratedCompactWriteCodecV1<${field.typeText}>> }")
-                appendLine(sb, 1, "private let ${compactRawCursorCodecName(field)}: Option<GeneratedCursorWriteCodecV1<${field.typeText}>> = match (${cachedFieldCodecName(field)}) { case __rawCursor: GeneratedCursorWriteCodecV1<${field.typeText}> => Some(__rawCursor); case _ => None<GeneratedCursorWriteCodecV1<${field.typeText}>> }")
+                appendFieldCodecBinding(members, deferred, compactRawCodecName(field),
+                    "Option<GeneratedCompactWriteCodecV1<${field.typeText}>>",
+                    "match (${cachedFieldCodecName(field)}) { case __raw: GeneratedCompactWriteCodecV1<${field.typeText}> => Some(__raw); case _ => None<GeneratedCompactWriteCodecV1<${field.typeText}>> }",
+                    deferInitialization)
+                appendFieldCodecBinding(members, deferred, compactRawCursorCodecName(field),
+                    "Option<GeneratedCursorWriteCodecV1<${field.typeText}>>",
+                    "match (${cachedFieldCodecName(field)}) { case __rawCursor: GeneratedCursorWriteCodecV1<${field.typeText}> => Some(__rawCursor); case _ => None<GeneratedCursorWriteCodecV1<${field.typeText}>> }",
+                    deferInitialization)
             }
         }
     }
+    appendDeferredFieldCodecs(sb, members, deferred, codecName, genericText, constraints)
+    appendLine(sb, 0, "private class ${codecName}${genericText} <: ${codecInterfaces}${constraints} {")
+    sb.append(members.toString())
     appendLine(sb, 1, "private let __yJsonFastFieldNames: Array<Array<Byte>> = unsafe { [" +
         joinStrings(fastLabelBytes, ", ") + "] }")
+    hasGeneratedWriteDependency
 }
 
 private func appendObjectSemanticWriteMethods(sb: StringBuilder, model: ObjectCodecModel): Unit {
@@ -906,13 +980,8 @@ private func appendObjectDirectWriteMethods(sb: StringBuilder, model: ObjectCode
     let fields = model.fields
     let targetType = model.targetType
     let isClass = model.isClass
-    let staticCompact = model.staticCompact
     appendLine(sb, 1, "public func writeDirect(value: ${targetType}, writer: GeneratedSupportV1Writer): Unit {")
-    appendLine(sb, 2, (if (staticCompact) {
-        "if (writer.tryBeginGeneratedCompactRawValue()) { writeCompactRaw(value, writer); return }"
-    } else {
-        "if (supportsCompactRaw() && writer.tryBeginGeneratedCompactRawValue()) { writeCompactRaw(value, writer); return }"
-    }))
+    appendLine(sb, 2, "if (supportsCompactRaw() && writer.tryBeginGeneratedCompactRawValue()) { writeCompactRaw(value, writer); return }")
     appendLine(sb, 2, "let context = GeneratedSupportV1.writeState(writer)")
     if (isClass) { appendLine(sb, 2, "context.enterObject(value)") } else { appendLine(sb, 2, "context.enterValue()") }
     appendLine(sb, 2, "try {")
@@ -936,11 +1005,15 @@ private func appendObjectDirectWriteMethods(sb: StringBuilder, model: ObjectCode
     appendLine(sb, 1, "}")
 }
 
-private func appendObjectCompactCursorWriteMethods(sb: StringBuilder, model: ObjectCodecModel): Unit {
+private func appendObjectCompactCursorWriteMethods(
+    sb: StringBuilder,
+    model: ObjectCodecModel,
+    hasGeneratedDependency: Bool
+): Unit {
     let fields = model.fields
     let targetType = model.targetType
-    let generics = model.genericNames
     let rawChecks = ArrayList<String>()
+    let stableChecks = ArrayList<String>()
     for (field in fields) {
         if (!field.writeField) { continue }
         if (compactRawSpecializedFieldWrite(field, "__value", "__first").isEmpty() &&
@@ -949,10 +1022,29 @@ private func appendObjectCompactCursorWriteMethods(sb: StringBuilder, model: Obj
                 "case Some(__rawCursor) => __rawCursor.supportsCompactCursorWrite(); " +
                 "case None => match (${compactRawCodecName(field)}) { " +
                 "case Some(__raw) => __raw.supportsCompactRaw(); case None => false } }")
+            stableChecks.add("match (${cachedFieldCodecName(field)}) { " +
+                "case __stable: GeneratedStableCompactWriteCodecV1 => __stable.supportsStableCompactWrite(); " +
+                "case _ => false }")
         }
     }
-    appendLine(sb, 1, "public func supportsCompactRaw(): Bool { " +
-        (if (rawChecks.isEmpty()) { "true" } else { joinStrings(rawChecks, " && ") }) + " }")
+    let capability = if (rawChecks.isEmpty()) { "true" } else { joinStrings(rawChecks, " && ") }
+    let stableCapability = if (stableChecks.isEmpty()) { "true" } else { joinStrings(stableChecks, " && ") }
+    if (hasGeneratedDependency) {
+        appendLine(sb, 1, "private let __yJsonCompactProof = GeneratedCompactCapabilityCacheV1()")
+        appendLine(sb, 1, "public func supportsStableCompactWrite(): Bool { __yJsonCompactProof.isSupported() }")
+        appendLine(sb, 1, "public func supportsCompactRaw(): Bool {")
+        appendLine(sb, 2, "if (__yJsonCompactProof.isSupported()) { return true }")
+        appendLine(sb, 2, "if (!GeneratedSupportV1.enterCompactCapabilityCheck<${targetType}>(this)) { return false }")
+        appendLine(sb, 2, "try {")
+        appendLine(sb, 3, "let __supported = ${capability}")
+        appendLine(sb, 3, "if (__supported && (${stableCapability})) { __yJsonCompactProof.markSupported() }")
+        appendLine(sb, 3, "__supported")
+        appendLine(sb, 2, "} finally { GeneratedSupportV1.leaveCompactCapabilityCheck() }")
+        appendLine(sb, 1, "}")
+    } else {
+        appendLine(sb, 1, "public func supportsStableCompactWrite(): Bool { ${stableCapability} }")
+        appendLine(sb, 1, "public func supportsCompactRaw(): Bool { ${capability} }")
+    }
     appendLine(sb, 1, "public func writeCompactRaw(value: ${targetType}, writer: GeneratedSupportV1Writer): Unit {")
     appendLine(sb, 2, "writeCompactRawWithCursor(value, writer, GeneratedSupportV1.writeCursor(writer))")
     appendLine(sb, 1, "}")
@@ -965,7 +1057,7 @@ private func appendObjectCompactCursorWriteMethods(sb: StringBuilder, model: Obj
     for (field in fields) {
         if (!field.writeField) { continue }
         let rawWrite = compactRawFieldWrite(field, "value.${field.name}", "__first")
-        if (compactRawFieldNeedsContext(field, generics)) {
+        if (compactRawFieldNeedsContext(field)) {
             appendLine(sb, 3, "context.pushField(${field.jsonNameExpr})")
             appendLine(sb, 3, "try { ${rawWrite} } finally { context.popPath() }")
         } else {
@@ -982,7 +1074,6 @@ private func appendObjectCompactCursorWriteMethods(sb: StringBuilder, model: Obj
 private func appendObjectCompactWriterMethod(sb: StringBuilder, model: ObjectCodecModel): Unit {
     let fields = model.fields
     let targetType = model.targetType
-    let generics = model.genericNames
     // Every generated object must account for its own write depth. Field-level
     // context checks only decide path tracking around nested field writes.
     var compactHasDirectField = false
@@ -992,10 +1083,12 @@ private func appendObjectCompactWriterMethod(sb: StringBuilder, model: ObjectCod
             break
         }
     }
+    // Any field that falls back to a cached protocol codec reuses one write
+    // cursor for the whole object instead of building one per field.
     var compactNeedsWriterCursor = false
     for (field in fields) {
         if (!field.writeField) { continue }
-        if (FieldWritePlan(field).needsCachedDirectCursor()) {
+        if (compactRawSpecializedFieldWrite(field, "__value", "__first").isEmpty()) {
             compactNeedsWriterCursor = true
             break
         }
@@ -1023,7 +1116,9 @@ private func appendObjectCompactWriterMethod(sb: StringBuilder, model: ObjectCod
     let scalarBufferBatch = generatedBufferAllScalar(fields)
     appendLine(sb, 2, "writer.writeRawBeginObject()")
     appendLine(sb, 2, "var __first = true")
+    var fieldIndex: Int64 = 0
     for (field in fields) {
+        fieldIndex++
         if (!field.writeField) {
             continue
         }
@@ -1031,15 +1126,26 @@ private func appendObjectCompactWriterMethod(sb: StringBuilder, model: ObjectCod
             FieldWritePlan(field), "value.${field.name}", "__first", scalarBufferBatch)
         let rawWrite = if (scalarRawWrite.isEmpty()) {
             compactRawConcreteFieldWrite(
-                field, "value.${field.name}", "__first", generics)
+                field, "value.${field.name}", "__first")
         } else {
             scalarRawWrite
         }
-        if (compactRawFieldNeedsContext(field, generics)) {
+        if (compactRawFieldNeedsContext(field)) {
             appendLine(sb, 2, "context.pushField(${field.jsonNameExpr})")
             appendLine(sb, 2, "try { ${rawWrite} } finally { context.popPath() }")
         } else {
             appendLine(sb, 2, rawWrite)
+        }
+        // A String value can expand up to six times while escaping, so its
+        // static reserve is only a lower bound. Re-establish the exact bound
+        // for the remaining fields before the following unchecked batched
+        // writes run; reserveCapacity is a no-op when capacity already
+        // suffices, so this adds no allocation or copying on the common path.
+        if (compactHasDirectField && scalarBufferBatch && isStringField(field)) {
+            let remainingHint = generatedBufferReserveHintFrom(fields, fieldIndex, "value")
+            if (!remainingHint.isEmpty()) {
+                appendLine(sb, 2, "__buffer.reserveCapacity(${remainingHint})")
+            }
         }
     }
     appendLine(sb, 3, "writer.writeRawEndObject()")
@@ -1073,10 +1179,10 @@ private func appendObjectCompactArrayListWriteMethod(sb: StringBuilder, model: O
 private func renderCodec(decl: Decl, body: Body, isClass: Bool): Tokens {
     let model = analyzeObjectCodec(decl, body, isClass)
     let sb = StringBuilder()
-    appendObjectCodecPrelude(sb, model)
+    let hasGeneratedDependency = appendObjectCodecPrelude(sb, model)
     appendObjectSemanticWriteMethods(sb, model)
     appendObjectDirectWriteMethods(sb, model)
-    appendObjectCompactCursorWriteMethods(sb, model)
+    appendObjectCompactCursorWriteMethods(sb, model, hasGeneratedDependency)
     if (model.staticCompact) {
         appendObjectCompactWriterMethod(sb, model)
         appendObjectCompactArrayListWriteMethod(sb, model)
@@ -1270,10 +1376,16 @@ private func renderPolymorphicCodec(model: PolymorphicCodecModel): Tokens {
     let subtypes = model.subtypes
 
     let sb = StringBuilder()
-    appendLine(sb, 0, "private class ${codecName}${genericText} <: GeneratedObjectCodecV1<${targetType}>${constraints} {")
+    let members = StringBuilder()
+    let deferred = ArrayList<(String, String, String)>()
     for (field in fields) {
-        appendLine(sb, 1, "private let ${cachedFieldCodecName(field)}: JsonCodec<${field.typeText}> = ${fieldCodecInitializer(field)}")
+        let (initializer, deferInitialization) = fieldCodecInitializer(field)
+        appendFieldCodecBinding(members, deferred, cachedFieldCodecName(field), "JsonCodec<${field.typeText}>",
+            initializer, deferInitialization)
     }
+    appendDeferredFieldCodecs(sb, members, deferred, codecName, genericText, constraints)
+    appendLine(sb, 0, "private class ${codecName}${genericText} <: GeneratedObjectCodecV1<${targetType}>${constraints} {")
+    sb.append(members.toString())
     appendLine(sb, 1, "public func write(value: ${targetType}, writer: JsonWriter): Unit {")
     appendLine(sb, 2, "let context = GeneratedSupportV1.writeState(writer)")
     appendLine(sb, 2, "context.enterObject(value)")
@@ -1358,6 +1470,7 @@ private func renderPolymorphicCodec(model: PolymorphicCodecModel): Tokens {
             appendLine(sb, 1, "public static func generatedObjectCodecV1(_: GeneratedCodecTokenV1<${targetType}>): GeneratedObjectCodecV1<${targetType}> { GeneratedSupportV1.requireProtocolVersion(1); ${codecName}${genericText}() }")
         appendLine(sb, 0, "}")
     }
+    appendInheritedFieldsProvider(sb, model.declaredSuperTypes, targetType, genericText, constraints)
     cangjieLex(sb.toString())
 }
 
