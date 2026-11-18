@@ -11,6 +11,8 @@
 - `@JsonUsing[codecExpression]`：为字段选择自定义 codec。
 - `@JsonSubtype[wireName, ConcreteType]`：为多态基类登记判别值和具体子类型。
 
+四个入口的源码注释使用 `@tag macro`，供 cjdoc 0.7.8 的统一 API 搜索按任务筛选。
+
 `@Json` 支持对象、数组、双引号字符串、布尔值、`null` 和 JSON 数字。
 使用 `$()` 插入运行时值和动态字符串键。插值从左到右各求值一次；
 动态键重复时保留最后一个成员。对象成员必须有逗号，允许尾逗号。

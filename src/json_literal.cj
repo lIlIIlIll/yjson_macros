@@ -476,6 +476,7 @@ private func parseJsonLiteral(input: Tokens): JsonLiteralDocument {
  * {"name":"Ada","score":7,"flags":[true,null]}
  * ```
  * @group 10-application 应用 API
+ * @tag macro
  */
 public macro Json(input: Tokens): Tokens {
     JsonLiteralRenderer().render(parseJsonLiteral(input))
